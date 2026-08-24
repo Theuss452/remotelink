@@ -48,11 +48,16 @@ class ScreenCaptureService : Service() {
         webRtcHost?.drainLocalCandidates(sessionHash) ?: emptyList()
     fun connectionState(sessionHash: String): String = webRtcHost?.connectionState(sessionHash) ?: "closed"
 
+    /**
+     * Ends only the current WebRTC peer. The MediaProjection authorization and
+     * foreground service stay alive so the user can reconnect without being
+     * forced through the Android capture permission dialog again.
+     */
     fun endSession(sessionHash: String) {
         webRtcHost?.endSession(sessionHash)
-        stopProjection()
     }
 
+    /** Fully revokes screen capture and tears down every WebRTC resource. */
     fun stopAll() {
         stopProjection()
     }
@@ -89,9 +94,9 @@ class ScreenCaptureService : Service() {
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.presence_video_online)
             .setContentTitle("RemoteLink")
-            .setContentText("Transmissão pronta para uma sessão WebRTC local.")
+            .setContentText("Transmissão autorizada. Nenhuma tela é enviada sem uma sessão aprovada.")
             .setOngoing(true)
-            .addAction(Notification.Action.Builder(null, "Encerrar", pi).build())
+            .addAction(Notification.Action.Builder(null, "Revogar transmissão", pi).build())
             .build()
     }
 
