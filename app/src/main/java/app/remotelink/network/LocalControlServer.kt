@@ -21,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 class LocalControlServer(
     private val context: Context,
@@ -29,13 +30,22 @@ class LocalControlServer(
     private val approvalHandler: (PairRequest, (Boolean) -> Unit) -> Unit
 ) {
     data class PairRequest(val requestId: String, val remoteIp: String)
+
     private data class Pending(
         var state: State,
         val remoteIp: String,
         var token: String? = null,
         val created: Long = System.currentTimeMillis()
     )
-    private data class Session(val hash: String, val remoteIp: String, val expiresAt: Long)
+
+    private data class Session(
+        val hash: String,
+        val remoteIp: String,
+        val expiresAt: Long,
+        val acceptedRemoteCandidates: AtomicInteger = AtomicInteger(0),
+        val rejectedRemoteCandidates: AtomicInteger = AtomicInteger(0)
+    )
+
     private enum class State { PENDING, APPROVED, DENIED }
 
     private val running = AtomicBoolean(false)
@@ -52,7 +62,10 @@ class LocalControlServer(
         if (!running.compareAndSet(false, true)) return
         val socket = bindRandomPort(binding.address)
         serverSocket = socket
-        acceptThread = Thread({ acceptLoop(socket) }, "RemoteLink-Accept").apply { isDaemon = true; start() }
+        acceptThread = Thread({ acceptLoop(socket) }, "RemoteLink-Accept").apply {
+            isDaemon = true
+            start()
+        }
     }
 
     fun stop() {
@@ -69,8 +82,9 @@ class LocalControlServer(
         val rng = SecureRandom()
         repeat(40) {
             val candidate = 42000 + rng.nextInt(10001)
-            try { return ServerSocket(candidate, 16, address).apply { reuseAddress = false } }
-            catch (_: Exception) {}
+            try {
+                return ServerSocket(candidate, 16, address).apply { reuseAddress = false }
+            } catch (_: Exception) {}
         }
         return ServerSocket(0, 16, address).apply { reuseAddress = false }
     }
@@ -89,8 +103,9 @@ class LocalControlServer(
             }
             workers.execute {
                 try { handle(client) }
-                catch (_: Exception) { try { respondJson(client, 400, JSONObject().put("error", "bad_request")) } catch (_: Exception) {} }
-                finally {
+                catch (_: Exception) {
+                    try { respondJson(client, 400, JSONObject().put("error", "bad_request")) } catch (_: Exception) {}
+                } finally {
                     slots.release()
                     try { client.close() } catch (_: Exception) {}
                 }
@@ -108,11 +123,14 @@ class LocalControlServer(
         val target = parts[1]
         val headers = mutableMapOf<String, String>()
         var totalHeaders = 0
+
         while (true) {
             val line = readLineLimited(input, 8192) ?: break
             if (line.isEmpty()) break
             totalHeaders += line.length
-            if (totalHeaders > 32_768) return respondJson(socket, 431, JSONObject().put("error", "headers_too_large"))
+            if (totalHeaders > 32_768) {
+                return respondJson(socket, 431, JSONObject().put("error", "headers_too_large"))
+            }
             val idx = line.indexOf(':')
             if (idx > 0) headers[line.substring(0, idx).trim().lowercase()] = line.substring(idx + 1).trim()
         }
@@ -132,7 +150,10 @@ class LocalControlServer(
         if (declaredLength < 0L || declaredLength > MAX_BODY_BYTES) {
             return respondJson(socket, 413, JSONObject().put("error", "body_too_large"))
         }
-        val body = if (declaredLength > 0) readFixed(input, declaredLength.toInt()).toString(StandardCharsets.UTF_8) else ""
+        val body = if (declaredLength > 0) {
+            readFixed(input, declaredLength.toInt()).toString(StandardCharsets.UTF_8)
+        } else ""
+
         cleanup()
 
         when {
@@ -155,14 +176,18 @@ class LocalControlServer(
     private fun status(socket: Socket) {
         val capture = ScreenCaptureService.instance?.isReady() == true
         val accessibility = RemoteAccessibilityService.instance != null
-        respondJson(socket, 200, JSONObject()
-            .put("name", "RemoteLink")
-            .put("version", "0.3-alpha")
-            .put("mode", "lan-webrtc")
-            .put("secureMedia", true)
-            .put("captureReady", capture)
-            .put("accessibilityReady", accessibility)
-            .put("singleViewer", true))
+        respondJson(
+            socket,
+            200,
+            JSONObject()
+                .put("name", "RemoteLink")
+                .put("version", "0.5-alpha")
+                .put("mode", "lan-webrtc")
+                .put("secureMedia", true)
+                .put("captureReady", capture)
+                .put("accessibilityReady", accessibility)
+                .put("singleViewer", true)
+        )
     }
 
     private fun beginPair(socket: Socket, body: String) {
@@ -175,15 +200,19 @@ class LocalControlServer(
                 approvalHandler(PairRequest(id, ip)) { approved ->
                     val p = pending[id] ?: return@approvalHandler
                     if (approved) {
-                        // v0.3 remains intentionally single-viewer. A newly approved
-                        // browser revokes any older browser session before receiving a token.
                         revokeAllSessions()
                         val token = pairingManager.issueSessionToken()
                         p.token = token
                         p.state = State.APPROVED
                         val hash = hashToken(token)
-                        sessions[hash] = Session(hash, p.remoteIp, System.currentTimeMillis() + SESSION_TTL_MS)
-                    } else p.state = State.DENIED
+                        sessions[hash] = Session(
+                            hash = hash,
+                            remoteIp = p.remoteIp,
+                            expiresAt = System.currentTimeMillis() + SESSION_TTL_MS
+                        )
+                    } else {
+                        p.state = State.DENIED
+                    }
                 }
                 respondJson(socket, 202, JSONObject().put("requestId", id).put("status", "pending"))
             }
@@ -197,12 +226,17 @@ class LocalControlServer(
     private fun pairStatus(socket: Socket, target: String) {
         val id = parseForm(target.substringAfter('?', ""))["id"]
             ?: return respondJson(socket, 400, JSONObject().put("error", "missing_id"))
-        val p = pending[id] ?: return respondJson(socket, 404, JSONObject().put("error", "unknown_request"))
+        val p = pending[id]
+            ?: return respondJson(socket, 404, JSONObject().put("error", "unknown_request"))
         val ip = socket.inetAddress.hostAddress ?: ""
         if (ip != p.remoteIp) return respondJson(socket, 403, JSONObject().put("error", "ip_mismatch"))
+
         when (p.state) {
             State.PENDING -> respondJson(socket, 200, JSONObject().put("status", "pending"))
-            State.DENIED -> { pending.remove(id); respondJson(socket, 403, JSONObject().put("status", "denied")) }
+            State.DENIED -> {
+                pending.remove(id)
+                respondJson(socket, 403, JSONObject().put("status", "denied"))
+            }
             State.APPROVED -> {
                 val token = p.token ?: ""
                 pending.remove(id)
@@ -212,31 +246,52 @@ class LocalControlServer(
     }
 
     private inline fun withSession(socket: Socket, headers: Map<String, String>, block: (Session) -> Unit) {
-        val raw = headers["authorization"] ?: return respondJson(socket, 401, JSONObject().put("error", "missing_session"))
-        if (!raw.startsWith("Bearer ", ignoreCase = true)) return respondJson(socket, 401, JSONObject().put("error", "bad_session"))
+        val raw = headers["authorization"]
+            ?: return respondJson(socket, 401, JSONObject().put("error", "missing_session"))
+        if (!raw.startsWith("Bearer ", ignoreCase = true)) {
+            return respondJson(socket, 401, JSONObject().put("error", "bad_session"))
+        }
+
         val hash = hashToken(raw.substringAfter(' ').trim())
-        val session = sessions[hash] ?: return respondJson(socket, 401, JSONObject().put("error", "invalid_session"))
+        val session = sessions[hash]
+            ?: return respondJson(socket, 401, JSONObject().put("error", "invalid_session"))
+
         if (System.currentTimeMillis() > session.expiresAt) {
             sessions.remove(hash)
             ScreenCaptureService.instance?.endSession(hash)
             return respondJson(socket, 401, JSONObject().put("error", "session_expired"))
         }
+
         val ip = socket.inetAddress.hostAddress ?: ""
-        if (ip != session.remoteIp) return respondJson(socket, 403, JSONObject().put("error", "ip_mismatch"))
+        if (ip != session.remoteIp) {
+            return respondJson(socket, 403, JSONObject().put("error", "ip_mismatch"))
+        }
         block(session)
     }
 
     private fun webRtcOffer(socket: Socket, session: Session, body: String) {
         val service = ScreenCaptureService.instance
             ?: return respondJson(socket, 409, JSONObject().put("error", "capture_not_ready"))
-        if (!service.isReady()) return respondJson(socket, 409, JSONObject().put("error", "capture_not_ready"))
+        if (!service.isReady()) {
+            return respondJson(socket, 409, JSONObject().put("error", "capture_not_ready"))
+        }
+
         val offer = try { JSONObject(body).optString("sdp") } catch (_: Exception) { "" }
-        if (offer.length !in 20..MAX_SDP_CHARS) return respondJson(socket, 400, JSONObject().put("error", "invalid_offer"))
+        if (offer.length !in 20..MAX_SDP_CHARS) {
+            return respondJson(socket, 400, JSONObject().put("error", "invalid_offer"))
+        }
+
         try {
             val answer = service.createAnswer(session.hash, offer)
             respondJson(socket, 200, JSONObject().put("type", "answer").put("sdp", answer))
         } catch (e: Exception) {
-            respondJson(socket, 500, JSONObject().put("error", "webrtc_failed").put("detail", (e.message ?: "unknown").take(240)))
+            respondJson(
+                socket,
+                500,
+                JSONObject()
+                    .put("error", "webrtc_failed")
+                    .put("detail", (e.message ?: "unknown").take(240))
+            )
         }
     }
 
@@ -246,14 +301,37 @@ class LocalControlServer(
         val obj = try { JSONObject(body) } catch (_: Exception) {
             return respondJson(socket, 400, JSONObject().put("error", "invalid_candidate"))
         }
-        val candidateText = obj.optString("candidate")
-        if (candidateText.isBlank() || candidateText.length > 8192 || !LanPolicy.isAllowedIceCandidate(candidateText, binding)) {
+
+        val rawCandidate = obj.optString("candidate")
+        if (rawCandidate.isBlank() || rawCandidate.length > 8192) {
+            session.rejectedRemoteCandidates.incrementAndGet()
             return respondJson(socket, 400, JSONObject().put("error", "invalid_candidate"))
         }
+
+        val normalizedCandidate = LanPolicy.normalizeRemoteIceCandidate(
+            rawCandidate,
+            session.remoteIp,
+            binding
+        )
+        if (normalizedCandidate == null) {
+            session.rejectedRemoteCandidates.incrementAndGet()
+            return respondJson(socket, 400, JSONObject().put("error", "invalid_candidate"))
+        }
+
         val mid = if (obj.isNull("sdpMid")) null else obj.optString("sdpMid").takeIf { it.isNotEmpty() }
         val line = obj.optInt("sdpMLineIndex", -1)
-        if (line < 0) return respondJson(socket, 400, JSONObject().put("error", "invalid_candidate"))
-        val ok = service.addRemoteCandidate(session.hash, WebRtcHost.SignalCandidate(mid, line, candidateText))
+        if (line < 0) {
+            session.rejectedRemoteCandidates.incrementAndGet()
+            return respondJson(socket, 400, JSONObject().put("error", "invalid_candidate"))
+        }
+
+        val ok = service.addRemoteCandidate(
+            session.hash,
+            WebRtcHost.SignalCandidate(mid, line, normalizedCandidate)
+        )
+        if (ok) session.acceptedRemoteCandidates.incrementAndGet()
+        else session.rejectedRemoteCandidates.incrementAndGet()
+
         respondJson(socket, if (ok) 200 else 409, JSONObject().put("ok", ok))
     }
 
@@ -262,20 +340,31 @@ class LocalControlServer(
             ?: return respondJson(socket, 409, JSONObject().put("error", "capture_not_ready"))
         val array = JSONArray()
         service.drainLocalCandidates(session.hash)
-            .filter { LanPolicy.isAllowedIceCandidate(it.candidate, binding) }
+            .filter { LanPolicy.isAllowedLocalIceCandidate(it.candidate, binding) }
             .forEach { c ->
-                array.put(JSONObject().put("sdpMid", c.sdpMid ?: JSONObject.NULL)
-                    .put("sdpMLineIndex", c.sdpMLineIndex).put("candidate", c.candidate))
+                array.put(
+                    JSONObject()
+                        .put("sdpMid", c.sdpMid ?: JSONObject.NULL)
+                        .put("sdpMLineIndex", c.sdpMLineIndex)
+                        .put("candidate", c.candidate)
+                )
             }
         respondJson(socket, 200, JSONObject().put("candidates", array))
     }
 
     private fun webRtcState(socket: Socket, session: Session) {
         val service = ScreenCaptureService.instance
-        respondJson(socket, 200, JSONObject()
-            .put("state", service?.connectionState(session.hash) ?: "closed")
-            .put("captureReady", service?.isReady() == true)
-            .put("accessibilityReady", RemoteAccessibilityService.instance != null))
+        respondJson(
+            socket,
+            200,
+            JSONObject()
+                .put("state", service?.connectionState(session.hash) ?: "closed")
+                .put("captureReady", service?.isReady() == true)
+                .put("captureStarted", service?.isCaptureStarted() == true)
+                .put("accessibilityReady", RemoteAccessibilityService.instance != null)
+                .put("remoteCandidatesAccepted", session.acceptedRemoteCandidates.get())
+                .put("remoteCandidatesRejected", session.rejectedRemoteCandidates.get())
+        )
     }
 
     private fun stopSession(socket: Socket, session: Session) {
@@ -292,7 +381,7 @@ class LocalControlServer(
 
     private fun cleanup() {
         val now = System.currentTimeMillis()
-        pending.entries.removeIf { now - it.value.created > 2 * 60_000L }
+        pending.entries.removeIf { now - it.value.created > PENDING_TTL_MS }
         val expired = sessions.values.filter { now > it.expiresAt }
         expired.forEach {
             sessions.remove(it.hash)
@@ -315,7 +404,8 @@ class LocalControlServer(
     }.toMap()
 
     private fun hashToken(token: String): String {
-        val d = MessageDigest.getInstance("SHA-256").digest(token.toByteArray(StandardCharsets.UTF_8))
+        val d = MessageDigest.getInstance("SHA-256")
+            .digest(token.toByteArray(StandardCharsets.UTF_8))
         return d.joinToString("") { "%02x".format(it) }
     }
 
@@ -344,16 +434,28 @@ class LocalControlServer(
 
     private fun respondJson(socket: Socket, code: Int, obj: JSONObject) =
         respond(socket, code, "application/json; charset=utf-8", obj.toString())
+
     private fun respond(socket: Socket, code: Int, type: String, text: String) =
         respondBytes(socket, code, type, text.toByteArray(StandardCharsets.UTF_8))
 
     private fun respondBytes(socket: Socket, code: Int, type: String, body: ByteArray) {
         val reason = when (code) {
-            200 -> "OK"; 202 -> "Accepted"; 400 -> "Bad Request"; 401 -> "Unauthorized"
-            403 -> "Forbidden"; 404 -> "Not Found"; 409 -> "Conflict"; 410 -> "Gone"
-            413 -> "Payload Too Large"; 429 -> "Too Many Requests"; 431 -> "Request Header Fields Too Large"
-            500 -> "Internal Server Error"; 503 -> "Service Unavailable"; else -> "Error"
+            200 -> "OK"
+            202 -> "Accepted"
+            400 -> "Bad Request"
+            401 -> "Unauthorized"
+            403 -> "Forbidden"
+            404 -> "Not Found"
+            409 -> "Conflict"
+            410 -> "Gone"
+            413 -> "Payload Too Large"
+            429 -> "Too Many Requests"
+            431 -> "Request Header Fields Too Large"
+            500 -> "Internal Server Error"
+            503 -> "Service Unavailable"
+            else -> "Error"
         }
+
         val out = BufferedOutputStream(socket.getOutputStream())
         val headers = buildString {
             append("HTTP/1.1 $code $reason\r\n")
@@ -361,21 +463,26 @@ class LocalControlServer(
             append("Content-Length: ${body.size}\r\n")
             append("Connection: close\r\n")
             append("Cache-Control: no-store\r\n")
+            append("Pragma: no-cache\r\n")
             append("X-Content-Type-Options: nosniff\r\n")
             append("X-Frame-Options: DENY\r\n")
             append("Cross-Origin-Resource-Policy: same-origin\r\n")
             append("Cross-Origin-Opener-Policy: same-origin\r\n")
             append("Referrer-Policy: no-referrer\r\n")
-            append("Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()\r\n")
-            append("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'\r\n")
+            append("Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=()\r\n")
+            append("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; media-src 'self' blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'\r\n")
             append("\r\n")
         }.toByteArray(StandardCharsets.US_ASCII)
-        out.write(headers); out.write(body); out.flush()
+
+        out.write(headers)
+        out.write(body)
+        out.flush()
     }
 
     companion object {
         private const val MAX_BODY_BYTES = 262_144L
         private const val MAX_SDP_CHARS = 180_000
         private const val SESSION_TTL_MS = 30 * 60_000L
+        private const val PENDING_TTL_MS = 90_000L
     }
 }
