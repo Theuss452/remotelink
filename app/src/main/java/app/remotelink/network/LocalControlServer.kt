@@ -139,6 +139,7 @@ class LocalControlServer(
             method == "GET" && target == "/" -> asset(socket, "web/index.html", "text/html; charset=utf-8")
             method == "GET" && target == "/styles.css" -> asset(socket, "web/styles.css", "text/css; charset=utf-8")
             method == "GET" && target == "/app.js" -> asset(socket, "web/app.js", "application/javascript; charset=utf-8")
+            method == "GET" && target == "/reconnect.js" -> asset(socket, "web/reconnect.js", "application/javascript; charset=utf-8")
             method == "GET" && target == "/api/status" -> status(socket)
             method == "POST" && target == "/api/pair" -> beginPair(socket, body)
             method == "GET" && target.startsWith("/api/pair/status?") -> pairStatus(socket, target)
@@ -156,7 +157,7 @@ class LocalControlServer(
         val accessibility = RemoteAccessibilityService.instance != null
         respondJson(socket, 200, JSONObject()
             .put("name", "RemoteLink")
-            .put("version", "0.2-alpha")
+            .put("version", "0.3-alpha")
             .put("mode", "lan-webrtc")
             .put("secureMedia", true)
             .put("captureReady", capture)
@@ -174,6 +175,9 @@ class LocalControlServer(
                 approvalHandler(PairRequest(id, ip)) { approved ->
                     val p = pending[id] ?: return@approvalHandler
                     if (approved) {
+                        // v0.3 remains intentionally single-viewer. A newly approved
+                        // browser revokes any older browser session before receiving a token.
+                        revokeAllSessions()
                         val token = pairingManager.issueSessionToken()
                         p.token = token
                         p.state = State.APPROVED
@@ -214,6 +218,7 @@ class LocalControlServer(
         val session = sessions[hash] ?: return respondJson(socket, 401, JSONObject().put("error", "invalid_session"))
         if (System.currentTimeMillis() > session.expiresAt) {
             sessions.remove(hash)
+            ScreenCaptureService.instance?.endSession(hash)
             return respondJson(socket, 401, JSONObject().put("error", "session_expired"))
         }
         val ip = socket.inetAddress.hostAddress ?: ""
@@ -279,10 +284,20 @@ class LocalControlServer(
         respondJson(socket, 200, JSONObject().put("ok", true))
     }
 
+    private fun revokeAllSessions() {
+        val hashes = sessions.keys.toList()
+        sessions.clear()
+        hashes.forEach { ScreenCaptureService.instance?.endSession(it) }
+    }
+
     private fun cleanup() {
         val now = System.currentTimeMillis()
         pending.entries.removeIf { now - it.value.created > 2 * 60_000L }
-        sessions.entries.removeIf { now > it.value.expiresAt }
+        val expired = sessions.values.filter { now > it.expiresAt }
+        expired.forEach {
+            sessions.remove(it.hash)
+            ScreenCaptureService.instance?.endSession(it.hash)
+        }
     }
 
     private fun asset(socket: Socket, path: String, type: String) {
