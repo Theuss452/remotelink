@@ -2,135 +2,248 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#F7F8FC"
-    android:fillViewport="true">
+    android:background="#090D14"
+    android:fillViewport="true"
+    android:clipToPadding="false">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="24dp">
+        android:paddingLeft="20dp"
+        android:paddingTop="26dp"
+        android:paddingRight="20dp"
+        android:paddingBottom="30dp">
 
-        <TextView
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="RemoteLink"
-            android:textColor="#121521"
-            android:textSize="30sp"
-            android:textStyle="bold" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="Controle Android pelo navegador • v0.2 alpha"
-            android:textColor="#667085"
-            android:textSize="14sp" />
+            <TextView
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="@drawable/bg_card"
+                android:gravity="center"
+                android:text="⌁"
+                android:textColor="#AFC0FF"
+                android:textSize="24sp"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="14dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="RemoteLink"
+                    android:textColor="#F5F8FD"
+                    android:textSize="27sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="Controle Android pelo navegador • v0.4 alpha"
+                    android:textColor="#7F8DA4"
+                    android:textSize="12sp" />
+            </LinearLayout>
+        </LinearLayout>
 
         <TextView
             android:id="@+id/securityBanner"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="22dp"
-            android:background="#FFF4D6"
-            android:padding="16dp"
-            android:text="v0.2: vídeo e comandos usam WebRTC. O servidor local aceita apenas IPv4 privado da sub-rede Wi‑Fi e exige código temporário + aprovação física. O signaling HTTP local ainda é uma limitação desta alpha."
-            android:textColor="#6B4E00"
-            android:textSize="14sp" />
+            android:background="@drawable/bg_status_banner"
+            android:padding="15dp"
+            android:text="Proteção ativa • vídeo e comandos usam WebRTC. O acesso local só aceita a sub-rede Wi‑Fi atual e ainda exige código temporário + aprovação neste celular."
+            android:textColor="#E4C985"
+            android:textSize="12sp" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="28dp"
-            android:text="Servidor local"
-            android:textColor="#121521"
-            android:textSize="18sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/statusText"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:text="● Desligado"
-            android:textColor="#667085"
-            android:textSize="16sp" />
+            android:layout_marginTop="18dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/addressText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="Endereço aparecerá aqui"
-            android:textColor="#121521"
-            android:textIsSelectable="true"
-            android:textSize="18sp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="ACESSO LOCAL"
+                android:textColor="#75849C"
+                android:textSize="10sp"
+                android:textStyle="bold" />
 
-        <TextView
-            android:id="@+id/codeText"
+            <TextView
+                android:id="@+id/statusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="● Desligado"
+                android:textColor="#97A3B6"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:text="Endereço no navegador"
+                android:textColor="#7B899E"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/addressText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="5dp"
+                android:text="Endereço aparecerá aqui"
+                android:textColor="#EAF0F8"
+                android:textIsSelectable="true"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:text="Código temporário"
+                android:textColor="#7B899E"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/codeText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:letterSpacing="0.08"
+                android:text="Código: —"
+                android:textColor="#9FB2FF"
+                android:textIsSelectable="true"
+                android:textSize="29sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/serverButton"
+                android:layout_width="match_parent"
+                android:layout_height="54dp"
+                android:layout_marginTop="20dp"
+                android:background="@drawable/bg_primary_button"
+                android:text="Iniciar acesso local"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/newCodeButton"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/bg_secondary_button"
+                android:enabled="false"
+                android:text="Gerar novo código"
+                android:textAllCaps="false"
+                android:textColor="#E3E9F2"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="14dp"
-            android:text="Código: —"
-            android:textColor="#315EFB"
-            android:textIsSelectable="true"
-            android:textSize="26sp"
-            android:textStyle="bold" />
+            android:background="@drawable/bg_card"
+            android:orientation="vertical">
 
-        <Button
-            android:id="@+id/serverButton"
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="PREPARAÇÃO DO ANDROID"
+                android:textColor="#75849C"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Autorize somente o que pretende usar"
+                android:textColor="#F2F5FA"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/captureStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="7dp"
+                android:text="Ative transmissão e controle para usar a sessão completa"
+                android:textColor="#94A0B2"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/captureButton"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:layout_marginTop="18dp"
+                android:background="@drawable/bg_secondary_button"
+                android:text="Autorizar transmissão de tela"
+                android:textAllCaps="false"
+                android:textColor="#E6ECF5"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/accessibilityButton"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:layout_marginTop="9dp"
+                android:background="@drawable/bg_secondary_button"
+                android:text="Ativar controle por acessibilidade"
+                android:textAllCaps="false"
+                android:textColor="#E6ECF5"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="52dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="COMO CONECTAR"
+                android:textColor="#75849C"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="1  Inicie o acesso local\n2  Abra o endereço no Chromebook\n3  Digite o código temporário\n4  Aprove a conexão neste celular"
+                android:textColor="#C8D1DF"
+                android:textSize="13sp"
+                android:lineSpacingExtra="6dp" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
             android:layout_marginTop="18dp"
-            android:text="Iniciar acesso local" />
-
-        <Button
-            android:id="@+id/newCodeButton"
-            android:layout_width="match_parent"
-            android:layout_height="52dp"
-            android:layout_marginTop="8dp"
-            android:enabled="false"
-            android:text="Gerar novo código" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="30dp"
-            android:text="Permissões do Android"
-            android:textColor="#121521"
-            android:textSize="18sp"
-            android:textStyle="bold" />
-
-        <Button
-            android:id="@+id/accessibilityButton"
-            android:layout_width="match_parent"
-            android:layout_height="52dp"
-            android:layout_marginTop="10dp"
-            android:text="Abrir permissão de controle" />
-
-        <Button
-            android:id="@+id/captureButton"
-            android:layout_width="match_parent"
-            android:layout_height="52dp"
-            android:layout_marginTop="8dp"
-            android:text="Autorizar transmissão de tela" />
-
-        <TextView
-            android:id="@+id/captureStatusText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="Transmissão: não autorizada"
-            android:textColor="#667085"
-            android:textSize="14sp" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="28dp"
-            android:paddingBottom="28dp"
-            android:text="Segurança: servidor vinculado somente a IPv4 privado do Wi‑Fi, filtro pela sub-rede real, código temporário, limite de tentativas, token preso ao IP e confirmação física. Não há UPnP nem abertura automática no roteador."
-            android:textColor="#667085"
-            android:textSize="13sp" />
+            android:gravity="center"
+            android:text="LAN-only • sem UPnP • uma sessão por vez"
+            android:textColor="#59667A"
+            android:textSize="10sp" />
     </LinearLayout>
 </ScrollView>
