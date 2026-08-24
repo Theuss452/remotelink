@@ -13,13 +13,16 @@ import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.View
 import android.widget.Button
+import android.widget.Switch
 import android.widget.TextView
 import app.remotelink.capture.ScreenCaptureService
 import app.remotelink.control.RemoteAccessibilityService
 import app.remotelink.network.LanPolicy
 import app.remotelink.network.LocalControlServer
 import app.remotelink.security.PairingManager
+import app.remotelink.update.UpdateManager
 
 class MainActivity : Activity() {
     private val pairing = PairingManager()
@@ -27,6 +30,9 @@ class MainActivity : Activity() {
     private var serverBinding: LanPolicy.WifiBinding? = null
     private var captureManager: MediaProjectionManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var updateManager: UpdateManager? = null
+    private var pendingUpdate: UpdateManager.DownloadResult.Ready? = null
+    private var updateCheckRunning = false
 
     private lateinit var statusText: TextView
     private lateinit var addressText: TextView
@@ -34,6 +40,10 @@ class MainActivity : Activity() {
     private lateinit var captureStatus: TextView
     private lateinit var serverButton: Button
     private lateinit var newCodeButton: Button
+    private lateinit var updateTitle: TextView
+    private lateinit var updateStatus: TextView
+    private lateinit var checkUpdateButton: Button
+    private lateinit var autoUpdateSwitch: Switch
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,7 +54,17 @@ class MainActivity : Activity() {
         captureStatus = findViewById(R.id.captureStatusText)
         serverButton = findViewById(R.id.serverButton)
         newCodeButton = findViewById(R.id.newCodeButton)
+        updateTitle = findViewById(R.id.updateTitle)
+        updateStatus = findViewById(R.id.updateStatusText)
+        checkUpdateButton = findViewById(R.id.checkUpdateButton)
+        autoUpdateSwitch = findViewById(R.id.autoUpdateSwitch)
         captureManager = getSystemService(MediaProjectionManager::class.java)
+        updateManager = UpdateManager(applicationContext)
+
+        findViewById<TextView>(R.id.versionSubtitle).text =
+            "Controle Android pelo navegador • v${BuildConfig.VERSION_NAME}"
+        findViewById<TextView>(R.id.footerText).text =
+            "LAN-only • sem UPnP • uma sessão por vez • v${BuildConfig.VERSION_NAME}"
 
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
@@ -52,19 +72,200 @@ class MainActivity : Activity() {
 
         serverButton.setOnClickListener { if (server == null) startServer() else stopServer() }
         newCodeButton.setOnClickListener { refreshCode() }
-        findViewById<Button>(R.id.accessibilityButton).setOnClickListener {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }
+        findViewById<Button>(R.id.accessibilityButton).setOnClickListener { showAccessibilityDisclosure() }
         findViewById<Button>(R.id.captureButton).setOnClickListener {
             val intent = captureManager?.createScreenCaptureIntent() ?: return@setOnClickListener
             startActivityForResult(intent, REQUEST_CAPTURE)
         }
+
+        configureUpdates()
     }
 
     override fun onResume() {
         super.onResume()
         updatePermissionState()
         verifyActiveNetwork()
+        val ready = pendingUpdate
+        if (ready != null && updateManager?.canRequestInstallPackages() == true) {
+            pendingUpdate = null
+            showInstallConfirmation(ready)
+        }
+    }
+
+    private fun configureUpdates() {
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val directConfigured = BuildConfig.DIRECT_UPDATES && BuildConfig.UPDATE_MANIFEST_URL.isNotBlank()
+
+        if (!BuildConfig.DIRECT_UPDATES) {
+            updateTitle.text = "Atualizações pelo Google Play"
+            updateStatus.text = "Esta distribuição usa o canal oficial do Google Play para verificar e instalar atualizações."
+            checkUpdateButton.visibility = View.GONE
+            autoUpdateSwitch.visibility = View.GONE
+            return
+        }
+
+        autoUpdateSwitch.isChecked = prefs.getBoolean(PREF_AUTO_UPDATE, true)
+        autoUpdateSwitch.setOnCheckedChangeListener { _, checked ->
+            prefs.edit().putBoolean(PREF_AUTO_UPDATE, checked).apply()
+        }
+        checkUpdateButton.setOnClickListener { checkForUpdates(userInitiated = true) }
+
+        if (!directConfigured) {
+            updateTitle.text = "Canal direto ainda não configurado"
+            updateStatus.text = "A build suporta atualização assinada, mas precisa de um endpoint HTTPS de releases configurado na compilação."
+            checkUpdateButton.isEnabled = false
+            autoUpdateSwitch.isEnabled = false
+            return
+        }
+
+        updateTitle.text = "Canal direto protegido"
+        updateStatus.text = "HTTPS + SHA‑256 + conferência do certificado da APK antes da instalação."
+        val lastCheck = prefs.getLong(PREF_LAST_UPDATE_CHECK, 0L)
+        if (autoUpdateSwitch.isChecked && System.currentTimeMillis() - lastCheck >= AUTO_CHECK_INTERVAL_MS) {
+            checkForUpdates(userInitiated = false)
+        }
+    }
+
+    private fun checkForUpdates(userInitiated: Boolean) {
+        if (updateCheckRunning) return
+        val manager = updateManager ?: return
+        updateCheckRunning = true
+        checkUpdateButton.isEnabled = false
+        updateTitle.text = "Verificando atualização…"
+        updateStatus.text = "Conectando ao canal HTTPS configurado."
+
+        manager.check { result ->
+            updateCheckRunning = false
+            checkUpdateButton.isEnabled = true
+            getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit().putLong(PREF_LAST_UPDATE_CHECK, System.currentTimeMillis()).apply()
+
+            when (result) {
+                UpdateManager.CheckResult.Disabled -> {
+                    updateTitle.text = "Atualizador indisponível"
+                    updateStatus.text = "O canal de atualização direta não está configurado nesta build."
+                }
+                UpdateManager.CheckResult.UpToDate -> {
+                    updateTitle.text = "RemoteLink atualizado"
+                    updateStatus.text = "Você já está usando a versão mais recente do canal configurado."
+                    if (userInitiated) showSimpleDialog("Sem atualização", "O RemoteLink já está atualizado.")
+                }
+                is UpdateManager.CheckResult.Error -> {
+                    updateTitle.text = "Não foi possível verificar"
+                    updateStatus.text = humanUpdateError(result.message)
+                    if (userInitiated) showSimpleDialog("Falha ao verificar", humanUpdateError(result.message))
+                }
+                is UpdateManager.CheckResult.Available -> {
+                    updateTitle.text = "Nova versão: ${result.info.versionName}"
+                    updateStatus.text = result.info.notes.ifBlank { "Atualização assinada disponível para download." }
+                    val auto = autoUpdateSwitch.isChecked && !userInitiated
+                    if (auto) downloadUpdate(result.info, automatic = true)
+                    else showUpdateAvailable(result.info)
+                }
+            }
+        }
+    }
+
+    private fun showUpdateAvailable(info: UpdateManager.UpdateInfo) {
+        val message = buildString {
+            append("Versão ${info.versionName} está disponível.\n\n")
+            if (info.notes.isNotBlank()) append(info.notes).append("\n\n")
+            append("A APK será aceita somente se o SHA‑256 e o certificado de assinatura forem válidos.")
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Atualização disponível")
+            .setMessage(message)
+            .setNegativeButton("Agora não", null)
+            .setPositiveButton("Baixar") { _, _ -> downloadUpdate(info, automatic = false) }
+            .show()
+    }
+
+    private fun downloadUpdate(info: UpdateManager.UpdateInfo, automatic: Boolean) {
+        val manager = updateManager ?: return
+        updateTitle.text = "Baixando ${info.versionName}…"
+        updateStatus.text = "O arquivo será validado antes de abrir o instalador do Android."
+        checkUpdateButton.isEnabled = false
+        manager.download(info) { result ->
+            checkUpdateButton.isEnabled = true
+            when (result) {
+                is UpdateManager.DownloadResult.Error -> {
+                    updateTitle.text = "Download recusado ou falhou"
+                    updateStatus.text = humanUpdateError(result.message)
+                    if (!automatic) showSimpleDialog("Atualização não instalada", humanUpdateError(result.message))
+                }
+                is UpdateManager.DownloadResult.Ready -> {
+                    updateTitle.text = "Atualização verificada"
+                    updateStatus.text = "SHA‑256, pacote, versão e assinatura conferidos. Falta apenas a confirmação do Android."
+                    handleVerifiedUpdate(result)
+                }
+            }
+        }
+    }
+
+    private fun handleVerifiedUpdate(ready: UpdateManager.DownloadResult.Ready) {
+        val manager = updateManager ?: return
+        if (manager.canRequestInstallPackages()) {
+            showInstallConfirmation(ready)
+        } else {
+            pendingUpdate = ready
+            AlertDialog.Builder(this)
+                .setTitle("Permitir instalação de atualização")
+                .setMessage(
+                    "O Android exige que você permita ao RemoteLink abrir APKs de atualização deste canal. " +
+                        "Essa permissão é usada somente depois que a nova APK passa pelas verificações de assinatura e SHA‑256."
+                )
+                .setNegativeButton("Cancelar") { _, _ -> pendingUpdate = null }
+                .setPositiveButton("Abrir configuração") { _, _ -> manager.openUnknownSourcesSettings() }
+                .show()
+        }
+    }
+
+    private fun showInstallConfirmation(ready: UpdateManager.DownloadResult.Ready) {
+        AlertDialog.Builder(this)
+            .setTitle("Instalar ${ready.info.versionName}?")
+            .setMessage(
+                "A atualização foi baixada e verificada. O instalador oficial do Android será aberto; " +
+                    "confirme a instalação na próxima tela."
+            )
+            .setNegativeButton("Depois", null)
+            .setPositiveButton("Abrir instalador") { _, _ ->
+                try { updateManager?.install(ready.file) }
+                catch (e: Exception) { showSimpleDialog("Falha ao abrir instalador", e.message ?: "Erro desconhecido") }
+            }
+            .show()
+    }
+
+    private fun showAccessibilityDisclosure() {
+        AlertDialog.Builder(this)
+            .setTitle("Controle remoto por Acessibilidade")
+            .setMessage(
+                "Ao ativar o serviço de Acessibilidade do RemoteLink, um navegador que você parear e aprovar fisicamente poderá " +
+                    "executar toques, arrastes e ações de navegação no Android.\n\n" +
+                    "Para permitir o teclado remoto, o serviço pode ler o conteúdo do campo editável que estiver focado somente para " +
+                    "inserir, apagar e mover o cursor. Esse conteúdo não é enviado a um servidor externo pelo RemoteLink.\n\n" +
+                    "O controle só deve ser ativado quando você pretende usar acesso remoto e pode ser desativado nas configurações do Android a qualquer momento."
+            )
+            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Entendi e continuar") { _, _ ->
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+            .show()
+    }
+
+    private fun humanUpdateError(raw: String): String = when (raw) {
+        "https_required" -> "O canal de atualização não usa HTTPS e foi bloqueado."
+        "sha256_mismatch" -> "O arquivo baixado não corresponde ao SHA‑256 publicado e foi descartado."
+        "signer_mismatch" -> "A APK não foi assinada pela mesma chave do RemoteLink instalado e foi bloqueada."
+        "package_mismatch" -> "A APK pertence a outro pacote e foi bloqueada."
+        "version_mismatch" -> "A versão da APK não corresponde ao manifesto de atualização."
+        "invalid_apk" -> "O arquivo recebido não é uma APK Android válida."
+        "apk_too_large" -> "A APK excede o limite de segurança do atualizador."
+        else -> "Falha no canal de atualização: ${raw.take(160)}"
+    }
+
+    private fun showSimpleDialog(title: String, message: String) {
+        if (isFinishing || isDestroyed) return
+        AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show()
     }
 
     private fun startServer() {
@@ -184,11 +385,17 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         stopServer()
+        updateManager?.close()
+        updateManager = null
         super.onDestroy()
     }
 
     companion object {
         private const val REQUEST_CAPTURE = 7001
         private const val REQUEST_NOTIFICATIONS = 7002
+        private const val PREFS_NAME = "remotelink_preferences"
+        private const val PREF_AUTO_UPDATE = "auto_update_download"
+        private const val PREF_LAST_UPDATE_CHECK = "last_update_check"
+        private const val AUTO_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000L
     }
 }
