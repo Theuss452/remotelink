@@ -8,7 +8,7 @@ $GradlewBat = Join-Path $Root "gradlew.bat"
 $ExpectedWrapperSha256 = "81a82aaea5abcc8ff68b3dfcb58b3c3c429378efd98e7433460610fecd7ae45f"
 
 Write-Host ""
-Write-Host "RemoteLink v0.2-alpha - preparar e compilar" -ForegroundColor Cyan
+Write-Host "RemoteLink v0.4-alpha - preparar e compilar" -ForegroundColor Cyan
 Write-Host "================================================" -ForegroundColor DarkCyan
 New-Item -ItemType Directory -Force -Path $WrapperDir | Out-Null
 
@@ -18,7 +18,7 @@ function Download-File([string]$Url, [string]$Destination) {
 }
 
 if (-not (Test-Path $WrapperJar)) {
-    Download-File "https://services.gradle.org/distributions/gradle-8.13-wrapper.jar" $WrapperJar
+    Download-File "https://raw.githubusercontent.com/gradle/gradle/v8.13.0/gradle/wrapper/gradle-wrapper.jar" $WrapperJar
 }
 $actualHash = (Get-FileHash -Algorithm SHA256 $WrapperJar).Hash.ToLowerInvariant()
 if ($actualHash -ne $ExpectedWrapperSha256) {
@@ -96,7 +96,7 @@ try {
     if (-not (Test-Path $BuiltApk)) {
         throw "Build terminou, mas o APK esperado nao foi encontrado: $BuiltApk"
     }
-    $OutputApk = Join-Path $Root "RemoteLink-v0.2-alpha-debug.apk"
+    $OutputApk = Join-Path $Root "RemoteLink-v0.4-alpha-debug.apk"
     Copy-Item -Force $BuiltApk $OutputApk
     Write-Host ""
     Write-Host "[SUCESSO] APK criado:" -ForegroundColor Green
