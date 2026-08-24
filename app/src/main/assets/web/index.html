@@ -14,7 +14,7 @@
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark" aria-hidden="true"><span></span><span></span></div>
-        <div><strong>RemoteLink</strong><small>Android remoto • LAN • v0.5 alpha</small></div>
+        <div><strong>RemoteLink</strong><small>Android remoto • LAN • v0.5.3 alpha</small></div>
       </div>
       <div class="top-actions">
         <span id="serverBadge" class="status-pill neutral"><i></i> verificando</span>
@@ -28,7 +28,11 @@
           <div>
             <span class="eyebrow">DISPOSITIVO REMOTO</span>
             <h1 id="viewerTitle">Aguardando conexão</h1>
-            <div class="viewer-subline"><span id="rtcState" class="mini-pill">offline</span><span>WebRTC direto na LAN</span></div>
+            <div class="viewer-subline">
+              <span id="rtcState" class="mini-pill">offline</span>
+              <span id="controlModeBadge" class="mini-pill">controle livre</span>
+              <span>WebRTC direto na LAN</span>
+            </div>
           </div>
           <div class="viewer-actions">
             <button id="fitButton" class="icon-button" type="button" disabled title="Ajustar / preencher">↕</button>
@@ -36,7 +40,7 @@
           </div>
         </div>
 
-        <div id="screenStage" class="screen-stage idle">
+        <div id="screenStage" class="screen-stage idle" tabindex="0" role="application" aria-label="Tela remota do Android. Clique para ativar o modo controle.">
           <div class="ambient a1"></div><div class="ambient a2"></div>
           <video id="remoteVideo" autoplay playsinline muted></video>
           <div id="screenPlaceholder" class="placeholder">
@@ -48,7 +52,7 @@
             <strong>Estabelecendo conexão segura</strong>
             <small id="connectingDetail">Negociando WebRTC na rede local…</small>
           </div>
-          <div id="interactionHint" class="interaction-hint hidden">Clique = toque • arraste = deslize • roda = rolagem • Esc = voltar</div>
+          <div id="interactionHint" class="interaction-hint hidden">Clique = toque • segure e arraste = dedo contínuo • roda = rolagem • teclado físico = Android • Esc = sair do controle</div>
         </div>
 
         <div class="control-dock">
@@ -86,9 +90,9 @@
         </section>
 
         <section class="panel text-panel">
-          <div class="section-head"><div><span class="eyebrow">TECLADO</span><h3>Enviar texto</h3></div><span class="mini-pill">v0.5</span></div>
-          <p>Selecione primeiro um campo editável no Android. Atalhos: Esc = Voltar, Alt+Home = Início.</p>
-          <div class="text-send-row"><input id="textInput" type="text" maxlength="4000" placeholder="Digite aqui…" disabled><button id="sendTextButton" class="secondary" type="button" disabled>Enviar</button></div>
+          <div class="section-head"><div><span class="eyebrow">TECLADO</span><h3>Teclado do Chromebook</h3></div><span class="mini-pill">v0.5.3</span></div>
+          <p>Clique primeiro em um campo no Android. Com o Modo controle ativo, caracteres, Backspace, Delete, setas, Home/End, Ctrl+A e Enter são enviados diretamente. Esc sai do Modo controle.</p>
+          <div class="text-send-row"><input id="textInput" type="text" maxlength="4000" placeholder="Ou envie um texto completo…" disabled><button id="sendTextButton" class="secondary" type="button" disabled>Enviar</button></div>
         </section>
 
         <section class="panel session-panel">
@@ -100,7 +104,7 @@
           <div class="session-rule"><span></span><p>Candidatos ICE do navegador ficam presos ao mesmo IP que foi pareado e aprovado no Android.</p></div>
         </section>
 
-        <section class="security-note"><span>i</span><p><strong>v0.5 alpha LAN-only.</strong> O signaling inicial ainda usa HTTP local; não trate redes Wi‑Fi públicas como confiáveis. A aprovação física e o token de sessão continuam obrigatórios.</p></section>
+        <section class="security-note"><span>i</span><p><strong>v0.5.3 alpha LAN-only.</strong> O signaling inicial ainda usa HTTP local; não trate redes Wi‑Fi públicas como confiáveis. A aprovação física e o token de sessão continuam obrigatórios.</p></section>
       </aside>
     </main>
   </div>
