@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">RemoteLink</string>
-    <string name="accessibility_description">Executa apenas gestos e ações enviados durante uma sessão de controle remoto autorizada pelo usuário.</string>
+    <string name="accessibility_description">Permite que um navegador pareado e aprovado pelo usuário execute gestos e ações de controle remoto. Para o teclado remoto, o serviço acessa somente o campo editável focado para inserir, apagar e mover o cursor.</string>
+    <string name="accessibility_intro">Use este serviço somente quando quiser controlar este Android remotamente. A ativação permite toques, arrastes, navegação e edição do campo de texto focado durante uma sessão RemoteLink aprovada.</string>
 </resources>
