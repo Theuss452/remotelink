@@ -8,7 +8,7 @@ $GradlewBat = Join-Path $Root "gradlew.bat"
 $ExpectedWrapperSha256 = "81a82aaea5abcc8ff68b3dfcb58b3c3c429378efd98e7433460610fecd7ae45f"
 
 Write-Host ""
-Write-Host "RemoteLink v0.4-alpha - preparar e compilar" -ForegroundColor Cyan
+Write-Host "RemoteLink v0.5-alpha - preparar e compilar" -ForegroundColor Cyan
 Write-Host "================================================" -ForegroundColor DarkCyan
 New-Item -ItemType Directory -Force -Path $WrapperDir | Out-Null
 
@@ -86,6 +86,14 @@ Write-Host "[OK] Android SDK: $sdk" -ForegroundColor Green
 Push-Location $Root
 try {
     Write-Host ""
+    Write-Host "Validando painel web..." -ForegroundColor Cyan
+    if (Get-Command node -ErrorAction SilentlyContinue) {
+        & node --check "app/src/main/assets/web/app.js"
+        if ($LASTEXITCODE -ne 0) { throw "app.js possui erro de sintaxe" }
+        & node --check "app/src/main/assets/web/reconnect.js"
+        if ($LASTEXITCODE -ne 0) { throw "reconnect.js possui erro de sintaxe" }
+    }
+
     Write-Host "Compilando APK debug..." -ForegroundColor Cyan
     & $GradlewBat --no-daemon --stacktrace assembleDebug
     if ($LASTEXITCODE -ne 0) {
@@ -96,7 +104,7 @@ try {
     if (-not (Test-Path $BuiltApk)) {
         throw "Build terminou, mas o APK esperado nao foi encontrado: $BuiltApk"
     }
-    $OutputApk = Join-Path $Root "RemoteLink-v0.4-alpha-debug.apk"
+    $OutputApk = Join-Path $Root "RemoteLink-v0.5-alpha-debug.apk"
     Copy-Item -Force $BuiltApk $OutputApk
     Write-Host ""
     Write-Host "[SUCESSO] APK criado:" -ForegroundColor Green
