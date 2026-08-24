@@ -14,7 +14,7 @@
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark" aria-hidden="true"><span></span><span></span></div>
-        <div><strong>RemoteLink</strong><small>Android remoto • LAN • v0.4 alpha</small></div>
+        <div><strong>RemoteLink</strong><small>Android remoto • LAN • v0.5 alpha</small></div>
       </div>
       <div class="top-actions">
         <span id="serverBadge" class="status-pill neutral"><i></i> verificando</span>
@@ -48,7 +48,7 @@
             <strong>Estabelecendo conexão segura</strong>
             <small id="connectingDetail">Negociando WebRTC na rede local…</small>
           </div>
-          <div id="interactionHint" class="interaction-hint hidden">Clique = toque • arraste = deslize • roda = rolagem</div>
+          <div id="interactionHint" class="interaction-hint hidden">Clique = toque • arraste = deslize • roda = rolagem • Esc = voltar</div>
         </div>
 
         <div class="control-dock">
@@ -86,8 +86,8 @@
         </section>
 
         <section class="panel text-panel">
-          <div class="section-head"><div><span class="eyebrow">TECLADO</span><h3>Enviar texto</h3></div><span class="mini-pill">beta</span></div>
-          <p>Selecione primeiro um campo editável no Android.</p>
+          <div class="section-head"><div><span class="eyebrow">TECLADO</span><h3>Enviar texto</h3></div><span class="mini-pill">v0.5</span></div>
+          <p>Selecione primeiro um campo editável no Android. Atalhos: Esc = Voltar, Alt+Home = Início.</p>
           <div class="text-send-row"><input id="textInput" type="text" maxlength="4000" placeholder="Digite aqui…" disabled><button id="sendTextButton" class="secondary" type="button" disabled>Enviar</button></div>
         </section>
 
@@ -97,10 +97,10 @@
             <strong>Vídeo e comandos criptografados</strong>
             <small>SRTP para mídia • DTLS no DataChannel • uma sessão por vez.</small>
           </div>
-          <div class="session-rule"><span></span><p>O servidor fica vinculado ao IPv4 privado da rede Wi‑Fi atual e não abre portas no roteador.</p></div>
+          <div class="session-rule"><span></span><p>Candidatos ICE do navegador ficam presos ao mesmo IP que foi pareado e aprovado no Android.</p></div>
         </section>
 
-        <section class="security-note"><span>i</span><p><strong>v0.4 alpha LAN-only.</strong> O signaling HTTP local ainda será substituído antes de uma versão estável para redes não confiáveis.</p></section>
+        <section class="security-note"><span>i</span><p><strong>v0.5 alpha LAN-only.</strong> O signaling inicial ainda usa HTTP local; não trate redes Wi‑Fi públicas como confiáveis. A aprovação física e o token de sessão continuam obrigatórios.</p></section>
       </aside>
     </main>
   </div>
