@@ -47,12 +47,6 @@ class RemoteAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    /**
-     * MediaProjection captures the complete physical display, including the
-     * portions behind system bars. resources.displayMetrics may describe only
-     * the app's usable area on some devices, so remote coordinates must use the
-     * real display size to stay aligned with the captured video.
-     */
     private fun realDisplaySize(): Point {
         val display = getSystemService(DisplayManager::class.java)
             ?.getDisplay(Display.DEFAULT_DISPLAY)
@@ -103,12 +97,6 @@ class RemoteAccessibilityService : AccessibilityService() {
         return dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, gestureHandler)
     }
 
-    /**
-     * Starts a real Android pointer-down that stays pressed across subsequent
-     * dragMoveNormalized() calls. API 26's continued strokes keep the same
-     * pointer down between dispatchGesture() calls, so games receive one
-     * press -> move -> release gesture instead of many independent swipes.
-     */
     fun dragStartNormalized(x: Float, y: Float): Boolean {
         val (px, py) = normalizedToPixels(x, y)
         gestureHandler.post { startDragInternal(px, py) }
@@ -156,7 +144,6 @@ class RemoteAccessibilityService : AccessibilityService() {
 
     private fun startDragInternal(px: Float, py: Float) {
         synchronized(dragLock) {
-            // A stale pointer should never survive into a new browser press.
             if (dragState != null) {
                 dragState?.ending = true
                 dragState?.let { if (!it.inFlight) dispatchNextDragSegmentLocked(it) }
@@ -334,8 +321,11 @@ class RemoteAccessibilityService : AccessibilityService() {
 
     fun pressFocusedEnter(): Boolean {
         val node = focusedEditable() ?: return false
-        if (Build.VERSION.SDK_INT >= 30 && node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_IME_ENTER }) {
-            if (node.performAction(AccessibilityNodeInfo.ACTION_IME_ENTER)) return true
+        if (Build.VERSION.SDK_INT >= 30) {
+            val imeEnter = AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER
+            if (node.actionList.any { it.id == imeEnter.id } && node.performAction(imeEnter.id)) {
+                return true
+            }
         }
         val multiline = node.inputType and InputType.TYPE_TEXT_FLAG_MULTI_LINE != 0
         return if (multiline) insertFocusedText("\n") else false
