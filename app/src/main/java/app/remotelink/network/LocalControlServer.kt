@@ -30,11 +30,18 @@ class LocalControlServer(
     private val pairingManager: PairingManager,
     private val approvalHandler: (PairRequest, (Boolean) -> Unit) -> Unit
 ) {
-    data class PairRequest(val requestId: String, val remoteIp: String)
+    data class PairRequest(
+        val requestId: String,
+        val remoteIp: String,
+        val sas: String? = null,
+        val strongPairing: Boolean = false
+    )
 
     private data class Pending(
         var state: State,
         val remoteIp: String,
+        val sas: String? = null,
+        val strongPairing: Boolean = false,
         var token: String? = null,
         val created: Long = System.currentTimeMillis()
     )
@@ -139,6 +146,7 @@ class LocalControlServer(
             method == "GET" && target == "/" -> asset(socket, "web/index.html", "text/html; charset=utf-8")
             method == "GET" && target == "/styles.css" -> asset(socket, "web/styles.css", "text/css; charset=utf-8")
             method == "GET" && target == "/app.js" -> asset(socket, "web/app.js", "application/javascript; charset=utf-8")
+            method == "GET" && target == "/strong-pair.js" -> asset(socket, "web/strong-pair.js", "application/javascript; charset=utf-8")
             method == "GET" && target == "/reconnect.js" -> asset(socket, "web/reconnect.js", "application/javascript; charset=utf-8")
             method == "GET" && target == "/transfer.js" -> asset(socket, "web/transfer.js", "application/javascript; charset=utf-8")
             method == "GET" && target == "/api/status" -> status(socket)
@@ -159,26 +167,58 @@ class LocalControlServer(
         respondJson(socket, 200, JSONObject()
             .put("name", "RemoteLink").put("version", BuildConfig.VERSION_NAME)
             .put("mode", "lan-webrtc").put("secureMedia", true)
+            .put("strongPairing", true)
             .put("captureReady", capture).put("accessibilityReady", accessibility).put("singleViewer", true))
     }
 
     private fun beginPair(socket: Socket, body: String) {
-        val code = parseForm(body)["code"] ?: ""
         val ip = socket.inetAddress.hostAddress ?: "desconhecido"
-        when (pairingManager.verify(code)) {
+        val trimmed = body.trim()
+        if (trimmed.startsWith("{")) {
+            val obj = try { JSONObject(trimmed) } catch (_: Exception) {
+                return respondJson(socket, 400, JSONObject().put("error", "invalid_pair_request"))
+            }
+            if (obj.optString("mode") == "strong") {
+                val result = pairingManager.verifyStrong(
+                    obj.optString("pairId"),
+                    obj.optString("clientNonce"),
+                    obj.optString("proof")
+                )
+                return handlePairVerification(socket, ip, result.result, result.sas, strong = true)
+            }
+        }
+
+        val code = parseForm(body)["code"] ?: ""
+        handlePairVerification(socket, ip, pairingManager.verify(code), sas = null, strong = false)
+    }
+
+    private fun handlePairVerification(
+        socket: Socket,
+        ip: String,
+        result: PairingManager.VerifyResult,
+        sas: String?,
+        strong: Boolean
+    ) {
+        when (result) {
             PairingManager.VerifyResult.OK -> {
-                val id = UUID.randomUUID().toString(); pending[id] = Pending(State.PENDING, ip)
-                approvalHandler(PairRequest(id, ip)) { approved ->
+                val id = UUID.randomUUID().toString()
+                pending[id] = Pending(State.PENDING, ip, sas = sas, strongPairing = strong)
+                approvalHandler(PairRequest(id, ip, sas = sas, strongPairing = strong)) { approved ->
                     val p = pending[id] ?: return@approvalHandler
                     if (approved) {
-                        revokeAllSessions(); val token = pairingManager.issueSessionToken(); p.token = token; p.state = State.APPROVED
+                        revokeAllSessions()
+                        val token = pairingManager.issueSessionToken()
+                        p.token = token
+                        p.state = State.APPROVED
                         val hash = hashToken(token)
                         sessions[hash] = Session(hash = hash, remoteIp = p.remoteIp, expiresAt = System.currentTimeMillis() + SESSION_TTL_MS)
                     } else p.state = State.DENIED
                 }
-                respondJson(socket, 202, JSONObject().put("requestId", id).put("status", "pending"))
+                val response = JSONObject().put("requestId", id).put("status", "pending").put("strong", strong)
+                if (sas != null) response.put("sas", sas)
+                respondJson(socket, 202, response)
             }
-            PairingManager.VerifyResult.INVALID -> respondJson(socket, 401, JSONObject().put("error", "invalid_code"))
+            PairingManager.VerifyResult.INVALID -> respondJson(socket, 401, JSONObject().put("error", if (strong) "invalid_proof" else "invalid_code"))
             PairingManager.VerifyResult.EXPIRED -> respondJson(socket, 410, JSONObject().put("error", "expired"))
             PairingManager.VerifyResult.LOCKED -> respondJson(socket, 429, JSONObject().put("error", "pairing_locked"))
             PairingManager.VerifyResult.CLOSED -> respondJson(socket, 409, JSONObject().put("error", "pairing_closed"))
@@ -191,9 +231,17 @@ class LocalControlServer(
         val ip = socket.inetAddress.hostAddress ?: ""
         if (ip != p.remoteIp) return respondJson(socket, 403, JSONObject().put("error", "ip_mismatch"))
         when (p.state) {
-            State.PENDING -> respondJson(socket, 200, JSONObject().put("status", "pending"))
+            State.PENDING -> {
+                val response = JSONObject().put("status", "pending").put("strong", p.strongPairing)
+                if (p.sas != null) response.put("sas", p.sas)
+                respondJson(socket, 200, response)
+            }
             State.DENIED -> { pending.remove(id); respondJson(socket, 403, JSONObject().put("status", "denied")) }
-            State.APPROVED -> { val token = p.token ?: ""; pending.remove(id); respondJson(socket, 200, JSONObject().put("status", "approved").put("token", token)) }
+            State.APPROVED -> {
+                val token = p.token ?: ""
+                pending.remove(id)
+                respondJson(socket, 200, JSONObject().put("status", "approved").put("token", token).put("strong", p.strongPairing))
+            }
         }
     }
 
