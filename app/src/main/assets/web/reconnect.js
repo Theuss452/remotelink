@@ -17,13 +17,8 @@
   postBrowserCandidate = async function(candidate) {
     if (!token || !candidate?.candidate) return;
     const response = await fetch('/api/webrtc/candidate', {
-      method: 'POST',
-      headers: jsonHeaders(),
-      body: JSON.stringify({
-        candidate: candidate.candidate,
-        sdpMid: candidate.sdpMid ?? null,
-        sdpMLineIndex: candidate.sdpMLineIndex
-      })
+      method: 'POST', headers: jsonHeaders(),
+      body: JSON.stringify({ candidate: candidate.candidate, sdpMid: candidate.sdpMid ?? null, sdpMLineIndex: candidate.sdpMLineIndex })
     });
     if (!response.ok) {
       const data = await safeJson(response);
@@ -64,25 +59,21 @@
 
   async function retryWebRtc() {
     if (reconnecting || !token || retries >= MAX_RETRIES) return;
-    reconnecting = true;
-    retries += 1;
+    reconnecting = true; retries += 1;
     const delay = BASE_DELAY_MS * retries;
     setMessage(`Conexão instável. Tentando reconectar (${retries}/${MAX_RETRIES})…`);
     setConnectOverlay(true, `Nova tentativa em ${(delay / 1000).toFixed(1)} s…`);
     await sleep(delay);
     if (!token) { reconnecting = false; return; }
-    try {
-      await startWebRtc();
-      startDiagnostics();
-    } catch (error) {
+    try { await startWebRtc(); startDiagnostics(); }
+    catch (error) {
       reconnecting = false;
       if (retries < MAX_RETRIES && token) retryWebRtc();
       else {
         setConnectOverlay(false);
         const detail = lastDiagnostic ? diagnosticText(lastDiagnostic) : '';
         setMessage(`A reconexão automática falhou. ${detail}`.trim(), 'error');
-        el.pairButton.disabled = false;
-        el.pairButton.textContent = 'Reconectar';
+        el.pairButton.disabled = false; el.pairButton.textContent = 'Reconectar';
       }
       return;
     }
@@ -92,13 +83,8 @@
   updateConnectionState = function(state) {
     originalUpdateConnectionState(state);
     if (state === 'connected') {
-      retries = 0;
-      reconnecting = false;
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-      clearInterval(diagnosticTimer);
-      diagnosticTimer = null;
-      return;
+      retries = 0; reconnecting = false; clearTimeout(reconnectTimer); reconnectTimer = null;
+      clearInterval(diagnosticTimer); diagnosticTimer = null; return;
     }
     if ((state === 'failed' || state === 'disconnected') && token && !reconnecting) {
       clearTimeout(reconnectTimer);
@@ -111,26 +97,41 @@
     const lossNode = ensureMetric('lossStat', 'Perda');
     const jitterNode = ensureMetric('jitterStat', 'Jitter');
     const bufferNode = ensureMetric('bufferStat', 'Buffer');
+    const decodeNode = ensureMetric('decodeStat', 'Decode');
+    const processNode = ensureMetric('processStat', 'Processo');
+    const dropNode = ensureMetric('dropStat', 'Drops');
+
     clearInterval(extraStatsTimer);
     extraStatsTimer = setInterval(async () => {
       if (!pc) return;
       try {
         const stats = await pc.getStats();
         let inbound = null;
-        stats.forEach(report => {
-          if (report.type === 'inbound-rtp' && report.kind === 'video') inbound = report;
-        });
+        stats.forEach(report => { if (report.type === 'inbound-rtp' && report.kind === 'video') inbound = report; });
         if (!inbound) return;
+
         const received = Number(inbound.packetsReceived || 0);
         const lost = Number(inbound.packetsLost || 0);
         const total = received + Math.max(0, lost);
         lossNode.textContent = total > 0 ? `${((Math.max(0, lost) / total) * 100).toFixed(1)}%` : '0%';
         jitterNode.textContent = Number.isFinite(inbound.jitter) ? `${Math.round(inbound.jitter * 1000)} ms` : '—';
+
         const emitted = Number(inbound.jitterBufferEmittedCount || 0);
-        const delay = Number(inbound.jitterBufferDelay || 0);
-        bufferNode.textContent = emitted > 0 ? `${Math.round((delay / emitted) * 1000)} ms` : '—';
+        const jitterDelay = Number(inbound.jitterBufferDelay || 0);
+        bufferNode.textContent = emitted > 0 ? `${Math.round((jitterDelay / emitted) * 1000)} ms` : '—';
+
+        const decoded = Number(inbound.framesDecoded || 0);
+        const decodeTime = Number(inbound.totalDecodeTime || 0);
+        decodeNode.textContent = decoded > 0 ? `${Math.round((decodeTime / decoded) * 1000)} ms` : '—';
+
+        const processingDelay = Number(inbound.totalProcessingDelay || 0);
+        processNode.textContent = decoded > 0 && processingDelay > 0 ? `${Math.round((processingDelay / decoded) * 1000)} ms` : '—';
+
+        const dropped = Number(inbound.framesDropped || 0);
+        const receivedFrames = Number(inbound.framesReceived || 0);
+        dropNode.textContent = receivedFrames > 0 ? `${((dropped / Math.max(1, receivedFrames)) * 100).toFixed(1)}%` : `${dropped}`;
       } catch {}
-    }, 1500);
+    }, 1200);
   };
 
   function ensureMetric(id, label) {
@@ -142,15 +143,6 @@
     grid?.appendChild(item);
     return item.querySelector('strong');
   }
-
-  document.addEventListener('keydown', event => {
-    if (!channelAuthenticated || !control || control.readyState !== 'open') return;
-    const target = event.target;
-    const typing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable;
-    if (typing) return;
-    if (event.key === 'Escape') { event.preventDefault(); sendControl({ type: 'back' }); }
-    else if (event.altKey && event.key === 'Home') { event.preventDefault(); sendControl({ type: 'home' }); }
-  });
 
   window.addEventListener('online', () => {
     if (token && pc && pc.connectionState !== 'connected') retryWebRtc();
