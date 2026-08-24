@@ -6,6 +6,10 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -20,7 +24,9 @@ import app.remotelink.security.PairingManager
 class MainActivity : Activity() {
     private val pairing = PairingManager()
     private var server: LocalControlServer? = null
+    private var serverBinding: LanPolicy.WifiBinding? = null
     private var captureManager: MediaProjectionManager? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     private lateinit var statusText: TextView
     private lateinit var addressText: TextView
@@ -58,6 +64,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         updatePermissionState()
+        verifyActiveNetwork()
     }
 
     private fun startServer() {
@@ -65,7 +72,7 @@ class MainActivity : Activity() {
         if (binding == null) {
             AlertDialog.Builder(this)
                 .setTitle("Wi‑Fi privado necessário")
-                .setMessage("Conecte o celular a uma rede Wi‑Fi com IPv4 privado. A v0.2 alpha não abre o servidor em dados móveis nem em uma interface com IPv4 público.")
+                .setMessage("Conecte o celular a uma rede Wi‑Fi com IPv4 privado. O RemoteLink não abre o servidor em dados móveis nem em uma interface com IPv4 público.")
                 .setPositiveButton("OK", null).show()
             return
         }
@@ -75,7 +82,7 @@ class MainActivity : Activity() {
                     .setTitle("Permitir conexão?")
                     .setMessage(
                         "Um navegador em ${request.remoteIp} informou o código correto.\n\n" +
-                        "Se você aprovar, ele poderá iniciar uma sessão WebRTC. O controle só funcionará se a permissão de Acessibilidade também estiver ativada."
+                            "Se você aprovar, ele poderá iniciar uma sessão WebRTC. O controle só funcionará se a permissão de Acessibilidade também estiver ativada."
                     )
                     .setNegativeButton("Recusar") { _, _ -> finish(false) }
                     .setPositiveButton("Permitir") { _, _ -> finish(true) }
@@ -84,7 +91,7 @@ class MainActivity : Activity() {
             }
         }
         try {
-            s.start(); server = s
+            s.start(); server = s; serverBinding = binding; registerNetworkGuard()
             statusText.text = "● LAN ativa"
             addressText.text = "http://${binding.address.hostAddress}:${s.port}"
             serverButton.text = "Parar acesso local"
@@ -92,18 +99,60 @@ class MainActivity : Activity() {
             refreshCode()
         } catch (e: Exception) {
             AlertDialog.Builder(this).setTitle("Falha ao iniciar").setMessage(e.message ?: e.javaClass.simpleName).setPositiveButton("OK", null).show()
-            s.stop()
+            s.stop(); serverBinding = null; unregisterNetworkGuard()
         }
     }
 
-    private fun stopServer() {
-        server?.stop(); server = null
-        pairing.invalidate()
+    private fun stopServer(reason: String? = null) {
+        server?.stop(); server = null; serverBinding = null
+        unregisterNetworkGuard(); pairing.invalidate()
         statusText.text = "● Desligado"
         addressText.text = "Endereço aparecerá aqui"
         codeText.text = "Código: —"
         serverButton.text = "Iniciar acesso local"
         newCodeButton.isEnabled = false
+        if (reason != null && !isFinishing && !isDestroyed) {
+            AlertDialog.Builder(this)
+                .setTitle("Acesso local encerrado")
+                .setMessage(reason)
+                .setPositiveButton("OK", null)
+                .show()
+        }
+    }
+
+    private fun registerNetworkGuard() {
+        unregisterNetworkGuard()
+        val cm = getSystemService(ConnectivityManager::class.java)
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onLost(network: Network) = verifyActiveNetworkAsync()
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) = verifyActiveNetworkAsync()
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) = verifyActiveNetworkAsync()
+        }
+        networkCallback = callback
+        try { cm.registerDefaultNetworkCallback(callback) }
+        catch (_: Exception) { networkCallback = null }
+    }
+
+    private fun unregisterNetworkGuard() {
+        val callback = networkCallback ?: return
+        networkCallback = null
+        try { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback) } catch (_: Exception) {}
+    }
+
+    private fun verifyActiveNetworkAsync() {
+        runOnUiThread { verifyActiveNetwork() }
+    }
+
+    private fun verifyActiveNetwork() {
+        val expected = serverBinding ?: return
+        if (server == null) return
+        val current = LanPolicy.findWifiBinding(this)
+        val unchanged = current != null &&
+            current.address.hostAddress == expected.address.hostAddress &&
+            current.prefixLength == expected.prefixLength
+        if (!unchanged) {
+            stopServer("A rede Wi‑Fi ou o endereço IP do celular mudou. Por segurança, a sessão foi revogada. Inicie o acesso novamente na rede atual.")
+        }
     }
 
     private fun refreshCode() {
