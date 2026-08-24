@@ -11,8 +11,8 @@ android {
         applicationId = "app.remotelink"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.5.0-alpha"
+        versionCode = 6
+        versionName = "0.5.1-alpha"
     }
 
     buildFeatures { buildConfig = true }
