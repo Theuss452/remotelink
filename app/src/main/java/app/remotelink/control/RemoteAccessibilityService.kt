@@ -3,7 +3,10 @@ package app.remotelink.control
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
+import android.graphics.Point
+import android.hardware.display.DisplayManager
 import android.os.Bundle
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
@@ -13,22 +16,55 @@ class RemoteAccessibilityService : AccessibilityService() {
     override fun onInterrupt() = Unit
     override fun onDestroy() { if (instance === this) instance = null; super.onDestroy() }
 
-    fun tapNormalized(x: Float, y: Float): Boolean {
+    /**
+     * MediaProjection captures the complete physical display, including the
+     * portions behind system bars. resources.displayMetrics may describe only
+     * the app's usable area on some devices, which caused Y coordinates sent
+     * from the browser to land progressively above the intended target.
+     */
+    private fun realDisplaySize(): Point {
+        val display = getSystemService(DisplayManager::class.java)
+            ?.getDisplay(Display.DEFAULT_DISPLAY)
+        if (display != null) {
+            @Suppress("DEPRECATION")
+            val metrics = android.util.DisplayMetrics().also { display.getRealMetrics(it) }
+            if (metrics.widthPixels > 0 && metrics.heightPixels > 0) {
+                return Point(metrics.widthPixels, metrics.heightPixels)
+            }
+        }
         val dm = resources.displayMetrics
-        val path = Path().apply { moveTo(x.coerceIn(0f, 1f) * dm.widthPixels, y.coerceIn(0f, 1f) * dm.heightPixels) }
+        return Point(dm.widthPixels.coerceAtLeast(1), dm.heightPixels.coerceAtLeast(1))
+    }
+
+    fun tapNormalized(x: Float, y: Float): Boolean {
+        val size = realDisplaySize()
+        val px = x.coerceIn(0f, 1f) * (size.x - 1).coerceAtLeast(1)
+        val py = y.coerceIn(0f, 1f) * (size.y - 1).coerceAtLeast(1)
+        val path = Path().apply { moveTo(px, py) }
         return dispatchGesture(
-            GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 50)).build(),
-            null, null
+            GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0, 38))
+                .build(),
+            null,
+            null
         )
     }
 
-    fun swipeNormalized(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long = 350): Boolean {
-        val dm = resources.displayMetrics
+    fun swipeNormalized(
+        x1: Float,
+        y1: Float,
+        x2: Float,
+        y2: Float,
+        durationMs: Long = 220
+    ): Boolean {
+        val size = realDisplaySize()
+        val width = (size.x - 1).coerceAtLeast(1)
+        val height = (size.y - 1).coerceAtLeast(1)
         val path = Path().apply {
-            moveTo(x1.coerceIn(0f,1f) * dm.widthPixels, y1.coerceIn(0f,1f) * dm.heightPixels)
-            lineTo(x2.coerceIn(0f,1f) * dm.widthPixels, y2.coerceIn(0f,1f) * dm.heightPixels)
+            moveTo(x1.coerceIn(0f, 1f) * width, y1.coerceIn(0f, 1f) * height)
+            lineTo(x2.coerceIn(0f, 1f) * width, y2.coerceIn(0f, 1f) * height)
         }
-        val stroke = GestureDescription.StrokeDescription(path, 0, durationMs.coerceIn(80, 1500))
+        val stroke = GestureDescription.StrokeDescription(path, 0, durationMs.coerceIn(70, 700))
         return dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
     }
 
