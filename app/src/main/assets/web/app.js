@@ -15,6 +15,7 @@ let pc=null, control=null, controlReady=false, channelAuthenticated=false, comma
 let remoteCandidateTimer=null, statsTimer=null, stateTimer=null;
 let browserCandidates=[], answerInstalled=false, pointerStart=null, lastBytes=null, lastBytesAt=null, fitMode='contain';
 let connectGeneration=0, controlMode=false, controlHistoryArmed=false, suppressHistoryPop=false;
+let wheelAccumX=0,wheelAccumY=0,wheelTimer=null,wheelAnchor={x:.5,y:.5};
 const pings=new Map();
 
 function setMessage(text,kind=''){el.message.textContent=text;el.message.className=`message ${kind}`;}
@@ -155,6 +156,7 @@ function enterControlMode(){
 }
 function exitControlMode(removeHistory=true){
   if(pointerStart)sendControl({type:'drag_cancel'});pointerStart=null;
+  clearTimeout(wheelTimer);wheelTimer=null;wheelAccumX=wheelAccumY=0;
   controlMode=false;document.documentElement.classList.remove('remote-control-active');el.stage.classList.remove('control-mode');el.controlModeBadge?.classList.remove('live');if(el.controlModeBadge)el.controlModeBadge.textContent='controle livre';
   if(removeHistory&&controlHistoryArmed){suppressHistoryPop=true;controlHistoryArmed=false;history.back();}
 }
@@ -196,11 +198,34 @@ el.stage.addEventListener('pointerup',ev=>{
 },{capture:true});
 el.stage.addEventListener('pointercancel',ev=>{if(pointerStart){pointerStart=null;sendControl({type:'drag_cancel'});}ev.preventDefault();ev.stopPropagation();},{capture:true});
 el.stage.addEventListener('contextmenu',ev=>{if(controlMode){ev.preventDefault();ev.stopPropagation();}});
+
+function flushWheelGesture(){
+  wheelTimer=null;
+  if(!controlMode||!controlReady||!el.stage.classList.contains('streaming')){wheelAccumX=wheelAccumY=0;return;}
+  const dx=wheelAccumX,dy=wheelAccumY;wheelAccumX=wheelAccumY=0;
+  if(Math.abs(dx)<1&&Math.abs(dy)<1)return;
+  const horizontal=Math.abs(dx)>Math.abs(dy)*1.15;
+  const raw=horizontal?dx:dy;
+  const strength=Math.min(.18,Math.max(.045,Math.abs(raw)/900));
+  const anchorX=Math.min(.82,Math.max(.18,wheelAnchor.x));
+  const anchorY=Math.min(.82,Math.max(.18,wheelAnchor.y));
+  if(horizontal){
+    const sign=Math.sign(raw);
+    sendControl({type:'swipe',x1:anchorX,y1:anchorY,x2:Math.min(.94,Math.max(.06,anchorX-sign*strength)),y2:anchorY,duration:150});
+  }else{
+    const sign=Math.sign(raw);
+    sendControl({type:'swipe',x1:anchorX,y1:anchorY,x2:anchorX,y2:Math.min(.94,Math.max(.06,anchorY-sign*strength)),duration:150});
+  }
+}
+
 el.stage.addEventListener('wheel',ev=>{
   if(!controlMode||!controlReady||!el.stage.classList.contains('streaming'))return;
-  const d=Math.sign(ev.deltaY);if(!d)return;
-  if(d>0)sendControl({type:'swipe',x1:.5,y1:.72,x2:.5,y2:.28,duration:115});else sendControl({type:'swipe',x1:.5,y1:.28,x2:.5,y2:.72,duration:115});
   ev.preventDefault();ev.stopPropagation();
+  if(pointerStart){pointerStart=null;sendControl({type:'drag_cancel'});}
+  const p=normalizedPoint(ev.clientX,ev.clientY);if(p)wheelAnchor=p;
+  const unit=ev.deltaMode===1?16:ev.deltaMode===2?120:1;
+  wheelAccumX+=ev.deltaX*unit;wheelAccumY+=ev.deltaY*unit;
+  clearTimeout(wheelTimer);wheelTimer=setTimeout(flushWheelGesture,42);
 },{passive:false,capture:true});
 
 function remoteKeyboardHandler(ev){
@@ -245,7 +270,7 @@ async function disconnect(invalidateSession){
   closePeerOnly(false);el.placeholder.classList.remove('hidden');el.stage.classList.remove('streaming','connected');el.video.srcObject=null;el.title.textContent='Aguardando conexão';el.disconnectTop.classList.add('hidden');el.fullscreen.disabled=true;el.fit.disabled=true;el.rtcState.textContent='offline';el.rtcState.classList.remove('live');setControlEnabled(false);el.latency.textContent=el.resolution.textContent=el.fps.textContent=el.bitrate.textContent='—';
   if(invalidateSession){el.pairButton.textContent='Conectar';el.pairButton.disabled=false;el.code.value='';setMessage('Sessão encerrada. Gere um novo código no Android para iniciar outra sessão.');}
 }
-function closePeerOnly(invalidateGeneration=true){if(invalidateGeneration)connectGeneration++;if(pointerStart)sendControl({type:'drag_cancel'});pointerStart=null;clearInterval(remoteCandidateTimer);clearInterval(statsTimer);clearInterval(stateTimer);remoteCandidateTimer=statsTimer=stateTimer=null;try{control?.close();}catch{}control=null;try{pc?.close();}catch{}pc=null;browserCandidates=[];answerInstalled=false;controlReady=false;channelAuthenticated=false;commandSeq=0;pings.clear();}
+function closePeerOnly(invalidateGeneration=true){if(invalidateGeneration)connectGeneration++;if(pointerStart)sendControl({type:'drag_cancel'});pointerStart=null;clearTimeout(wheelTimer);wheelTimer=null;wheelAccumX=wheelAccumY=0;clearInterval(remoteCandidateTimer);clearInterval(statsTimer);clearInterval(stateTimer);remoteCandidateTimer=statsTimer=stateTimer=null;try{control?.close();}catch{}control=null;try{pc?.close();}catch{}pc=null;browserCandidates=[];answerInstalled=false;controlReady=false;channelAuthenticated=false;commandSeq=0;pings.clear();}
 async function safeJson(r){try{return await r.json();}catch{return{};}}
 async function resumeIfPossible(){const s=await apiStatus();if(!s||!token)return;try{const r=await fetch('/api/webrtc/state',{headers:authHeaders(),cache:'no-store'});if(!r.ok)throw new Error();setMessage('Sessão anterior encontrada. Reconectando…');el.pairButton.disabled=true;await startWebRtc();}catch{sessionStorage.removeItem('remotelink_session');token='';el.pairButton.disabled=false;el.pairButton.textContent='Conectar';}}
 window.addEventListener('pagehide',()=>{if(token){try{fetch('/api/session/stop',{method:'POST',headers:authHeaders(),keepalive:true});}catch{}}closePeerOnly();});
