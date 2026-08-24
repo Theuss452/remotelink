@@ -272,12 +272,32 @@ class WebRtcHost(
     }
 
     private fun dispatchControl(obj: JSONObject, channel: DataChannel) {
-        val service = RemoteAccessibilityService.instance ?: run { sendJson(channel, JSONObject().put("type", "control_error").put("error", "accessibility_disabled")); return }
+        val service = RemoteAccessibilityService.instance ?: run {
+            sendJson(channel, JSONObject().put("type", "control_error").put("error", "accessibility_disabled"))
+            return
+        }
         val ok = when (obj.optString("type")) {
             "tap" -> service.tapNormalized(obj.optDouble("x").toFloat(), obj.optDouble("y").toFloat())
-            "swipe" -> service.swipeNormalized(obj.optDouble("x1").toFloat(), obj.optDouble("y1").toFloat(), obj.optDouble("x2").toFloat(), obj.optDouble("y2").toFloat(), obj.optLong("duration", 180L))
-            "back" -> service.back(); "home" -> service.home(); "recents" -> service.recents()
-            "text" -> service.setFocusedText(obj.optString("text")); else -> false
+            "swipe" -> service.swipeNormalized(
+                obj.optDouble("x1").toFloat(), obj.optDouble("y1").toFloat(),
+                obj.optDouble("x2").toFloat(), obj.optDouble("y2").toFloat(),
+                obj.optLong("duration", 180L)
+            )
+            "drag_start" -> service.dragStartNormalized(obj.optDouble("x").toFloat(), obj.optDouble("y").toFloat())
+            "drag_move" -> service.dragMoveNormalized(obj.optDouble("x").toFloat(), obj.optDouble("y").toFloat())
+            "drag_end" -> service.dragEndNormalized(obj.optDouble("x").toFloat(), obj.optDouble("y").toFloat())
+            "drag_cancel" -> { service.cancelRemoteDrag(); true }
+            "back" -> service.back()
+            "home" -> service.home()
+            "recents" -> service.recents()
+            "text" -> service.setFocusedText(obj.optString("text"))
+            "key_text" -> service.insertFocusedText(obj.optString("text"))
+            "key_backspace" -> service.deleteFocusedText(backward = true)
+            "key_delete" -> service.deleteFocusedText(backward = false)
+            "key_cursor" -> service.moveFocusedCursor(obj.optString("direction"))
+            "key_select_all" -> service.selectAllFocusedText()
+            "key_enter" -> service.pressFocusedEnter()
+            else -> false
         }
         if (!ok) sendJson(channel, JSONObject().put("type", "control_error").put("error", "action_failed"))
     }
@@ -288,6 +308,7 @@ class WebRtcHost(
     }
 
     private fun closePeerLocked() {
+        RemoteAccessibilityService.instance?.cancelRemoteDrag()
         controlAuthenticated = false; lastCommandSeq = 0L; peerState = "closed"; iceState = "closed"; gatheringState = "complete"
         try { controlChannel?.unregisterObserver() } catch (_: Exception) {}; try { controlChannel?.close() } catch (_: Exception) {}; try { controlChannel?.dispose() } catch (_: Exception) {}
         controlChannel = null; videoSender = null
