@@ -57,7 +57,9 @@ fi
 printf 'sdk.dir=%s\n' "$SDK" > "$ROOT/local.properties"
 
 cd "$ROOT"
+node --check app/src/main/assets/web/app.js
+node --check app/src/main/assets/web/reconnect.js
 ./gradlew --no-daemon --stacktrace assembleDebug
-cp -f app/build/outputs/apk/debug/app-debug.apk RemoteLink-v0.4-alpha-debug.apk
+cp -f app/build/outputs/apk/debug/app-debug.apk RemoteLink-v0.5-alpha-debug.apk
 
-echo "APK: $ROOT/RemoteLink-v0.4-alpha-debug.apk"
+echo "APK: $ROOT/RemoteLink-v0.5-alpha-debug.apk"
