@@ -1,0 +1,36 @@
+# Build
+build/
+.gradle/
+*.apk
+*.aar
+out/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Gradle
+gradle/wrapper/gradle-wrapper.jar
+gradlew
+gradlew.bat
+.gradle
+
+# Local properties
+local.properties
+
+# Build outputs
+app/build/
+*/build/
+
+# Native debug symbols
+*.so
+
+# Kotlin
+.kotlin/

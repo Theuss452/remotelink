@@ -1,0 +1,33 @@
+RemoteLink v0.2.0-alpha
+
+IMPLEMENTADO
+- Android server LAN em IPv4 privado Wi-Fi
+- sub-rede + porta aleatória
+- pareamento temporário, aprovação física, sessão presa ao IP
+- WebRTC single-viewer + filtro de ICE host/LAN
+- ScreenCapturerAndroid / MediaProjection
+- DataChannel autenticado
+- tap, swipe, scroll, Back, Home, Recents, texto
+- painel web redesenhado e responsivo
+- métricas WebRTC, fullscreen e fit/cover
+- Origin/Host checks + limites HTTP
+- scripts de build
+
+VALIDADO ESTATICAMENTE
+- JavaScript
+- HTML/XML
+- referências DOM/assets
+- sintaxe de shell
+- integridade do ZIP
+
+PRECISA DE TESTE REAL
+- build com Android SDK
+- instalação em aparelho físico
+- compatibilidade de encoder em diferentes aparelhos
+- rotação durante sessão
+- Accessibility em diferentes apps
+- testes de latência/reconexão
+- auditoria de segurança
+
+LIMITAÇÃO CONHECIDA
+- signaling/bootstrap ainda usa HTTP local.

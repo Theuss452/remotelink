@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F7F8FC"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="RemoteLink"
+            android:textColor="#121521"
+            android:textSize="30sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Controle Android pelo navegador • v0.2 alpha"
+            android:textColor="#667085"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/securityBanner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="22dp"
+            android:background="#FFF4D6"
+            android:padding="16dp"
+            android:text="v0.2: vídeo e comandos usam WebRTC. O servidor local aceita apenas IPv4 privado da sub-rede Wi‑Fi e exige código temporário + aprovação física. O signaling HTTP local ainda é uma limitação desta alpha."
+            android:textColor="#6B4E00"
+            android:textSize="14sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:text="Servidor local"
+            android:textColor="#121521"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="● Desligado"
+            android:textColor="#667085"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/addressText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Endereço aparecerá aqui"
+            android:textColor="#121521"
+            android:textIsSelectable="true"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/codeText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:text="Código: —"
+            android:textColor="#315EFB"
+            android:textIsSelectable="true"
+            android:textSize="26sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/serverButton"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginTop="18dp"
+            android:text="Iniciar acesso local" />
+
+        <Button
+            android:id="@+id/newCodeButton"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginTop="8dp"
+            android:enabled="false"
+            android:text="Gerar novo código" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="30dp"
+            android:text="Permissões do Android"
+            android:textColor="#121521"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/accessibilityButton"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginTop="10dp"
+            android:text="Abrir permissão de controle" />
+
+        <Button
+            android:id="@+id/captureButton"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginTop="8dp"
+            android:text="Autorizar transmissão de tela" />
+
+        <TextView
+            android:id="@+id/captureStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Transmissão: não autorizada"
+            android:textColor="#667085"
+            android:textSize="14sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:paddingBottom="28dp"
+            android:text="Segurança: servidor vinculado somente a IPv4 privado do Wi‑Fi, filtro pela sub-rede real, código temporário, limite de tentativas, token preso ao IP e confirmação física. Não há UPnP nem abertura automática no roteador."
+            android:textColor="#667085"
+            android:textSize="13sp" />
+    </LinearLayout>
+</ScrollView>
