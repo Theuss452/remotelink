@@ -82,4 +82,5 @@ kotlin {
 dependencies {
     implementation("io.github.webrtc-sdk:android:144.7559.12")
     implementation("androidx.core:core:1.17.0")
+    implementation("com.google.zxing:core:3.5.3")
 }
