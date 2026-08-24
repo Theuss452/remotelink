@@ -5,6 +5,13 @@ build/
 *.aar
 out/
 
+# Android signing keys - NEVER commit release credentials
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+
 # IDE
 .idea/
 .vscode/
