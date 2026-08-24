@@ -265,7 +265,7 @@ class RemoteAccessibilityService : AccessibilityService() {
         if (text.isEmpty() || text.length > 16) return false
         val node = focusedEditable() ?: return false
         if (node.isPassword) return false
-        val current = node.text?.toString().orEmpty()
+        val current = editableText(node)
         val (start, end) = selectionRange(node, current.length)
         val updated = (current.substring(0, start) + text + current.substring(end))
             .take(MAX_TEXT_LENGTH)
@@ -276,7 +276,7 @@ class RemoteAccessibilityService : AccessibilityService() {
     fun deleteFocusedText(backward: Boolean): Boolean {
         val node = focusedEditable() ?: return false
         if (node.isPassword) return false
-        val current = node.text?.toString().orEmpty()
+        val current = editableText(node)
         if (current.isEmpty()) return true
         val (start, end) = selectionRange(node, current.length)
 
@@ -301,7 +301,7 @@ class RemoteAccessibilityService : AccessibilityService() {
 
     fun moveFocusedCursor(action: String): Boolean {
         val node = focusedEditable() ?: return false
-        val current = node.text?.toString().orEmpty()
+        val current = editableText(node)
         val (start, end) = selectionRange(node, current.length)
         val cursor = when (action) {
             "left" -> if (start != end) start else if (start > 0) current.offsetByCodePoints(start, -1) else 0
@@ -315,7 +315,7 @@ class RemoteAccessibilityService : AccessibilityService() {
 
     fun selectAllFocusedText(): Boolean {
         val node = focusedEditable() ?: return false
-        val length = node.text?.length ?: 0
+        val length = editableText(node).length
         return setSelection(node, 0, length)
     }
 
@@ -329,6 +329,24 @@ class RemoteAccessibilityService : AccessibilityService() {
         }
         val multiline = node.inputType and InputType.TYPE_TEXT_FLAG_MULTI_LINE != 0
         return if (multiline) insertFocusedText("\n") else false
+    }
+
+    /**
+     * Some Android widgets expose their hint/placeholder through node.text while
+     * the field is still empty. Treating that hint as user content caused remote
+     * typing to turn e.g. "Pesquise no Google..." into real text. API 26+
+     * exposes isShowingHintText/hintText, so keep hints out of all editing math.
+     */
+    private fun editableText(node: AccessibilityNodeInfo): String {
+        val raw = node.text?.toString().orEmpty()
+        if (node.isShowingHintText) return ""
+        val hint = node.hintText?.toString().orEmpty()
+        if (raw.isNotEmpty() && hint.isNotEmpty() && raw == hint) {
+            val start = node.textSelectionStart
+            val end = node.textSelectionEnd
+            if (start <= 0 && end <= 0) return ""
+        }
+        return raw
     }
 
     private fun focusedEditable(): AccessibilityNodeInfo? {
