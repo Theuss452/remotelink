@@ -1,4 +1,4 @@
-name: Build RemoteLink APK
+name: Build RemoteLink Android
 
 on:
   push:
@@ -11,7 +11,14 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      REMOTELINK_UPDATE_MANIFEST_URL: ${{ vars.REMOTELINK_UPDATE_MANIFEST_URL }}
+      REMOTELINK_DIRECT_APK_URL: ${{ vars.REMOTELINK_DIRECT_APK_URL }}
 
     steps:
       - name: Checkout
@@ -44,17 +51,89 @@ jobs:
         with:
           gradle-version: '8.13'
 
-      - name: Build debug APK
+      - name: Prepare Android SDK
+        shell: bash
+        run: printf 'sdk.dir=%s\n' "$ANDROID_SDK_ROOT" > local.properties
+
+      - name: Build direct debug APK
         shell: bash
         run: |
-          printf 'sdk.dir=%s\n' "$ANDROID_SDK_ROOT" > local.properties
-          gradle --no-daemon --stacktrace assembleDebug
-          cp -f app/build/outputs/apk/debug/app-debug.apk RemoteLink-v0.6-alpha-debug.apk
+          gradle --no-daemon --stacktrace assembleDirectDebug
+          cp -f app/build/outputs/apk/direct/debug/app-direct-debug.apk RemoteLink-v0.7-alpha-direct-debug.apk
 
-      - name: Upload APK
+      - name: Upload direct debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: RemoteLink-v0.6-alpha-debug
-          path: RemoteLink-v0.6-alpha-debug.apk
+          name: RemoteLink-v0.7-alpha-direct-debug
+          path: RemoteLink-v0.7-alpha-direct-debug.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Check release signing configuration
+        id: signing
+        shell: bash
+        run: |
+          if [[ -n "$ANDROID_KEYSTORE_BASE64" && -n "$ANDROID_KEYSTORE_PASSWORD" && -n "$ANDROID_KEY_ALIAS" && -n "$ANDROID_KEY_PASSWORD" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Signed release skipped: configure ANDROID_KEYSTORE_* repository secrets."
+          fi
+
+      - name: Restore release keystore
+        if: steps.signing.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/remotelink-release.jks"
+          chmod 600 "$RUNNER_TEMP/remotelink-release.jks"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/remotelink-release.jks" >> "$GITHUB_ENV"
+
+      - name: Build signed direct release APK and Play AAB
+        if: steps.signing.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          gradle --no-daemon --stacktrace assembleDirectRelease bundlePlayRelease
+          cp -f app/build/outputs/apk/direct/release/app-direct-release.apk RemoteLink-v0.7-alpha-release.apk
+          cp -f app/build/outputs/bundle/playRelease/app-play-release.aab RemoteLink-v0.7-alpha-play.aab
+
+      - name: Verify release APK signature
+        if: steps.signing.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          apksigner verify --verbose --print-certs RemoteLink-v0.7-alpha-release.apk
+          keytool -printcert -jarfile RemoteLink-v0.7-alpha-release.apk
+
+      - name: Generate direct update manifest
+        if: steps.signing.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          SHA256="$(sha256sum RemoteLink-v0.7-alpha-release.apk | awk '{print $1}')"
+          python3 - <<'PY'
+          import json, os
+          apk_url = os.environ.get('REMOTELINK_DIRECT_APK_URL', '').strip()
+          sha = os.popen("sha256sum RemoteLink-v0.7-alpha-release.apk").read().split()[0]
+          data = {
+              "packageName": "app.remotelink",
+              "versionCode": 10,
+              "versionName": "0.7-alpha",
+              "apkUrl": apk_url,
+              "sha256": sha,
+              "notes": "RemoteLink v0.7-alpha: distribuição assinada, atualizador verificado e melhorias de segurança."
+          }
+          with open('updates.json', 'w', encoding='utf-8') as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+              f.write('\n')
+          PY
+          cat updates.json
+
+      - name: Upload signed release bundle
+        if: steps.signing.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemoteLink-v0.7-alpha-signed-release
+          path: |
+            RemoteLink-v0.7-alpha-release.apk
+            RemoteLink-v0.7-alpha-play.aab
+            updates.json
+          if-no-files-found: error
+          retention-days: 30
