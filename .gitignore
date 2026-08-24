@@ -11,6 +11,8 @@ out/
 *.p12
 *.pem
 *.key
+*.b64
+tools/private-signing/
 
 # IDE
 .idea/
