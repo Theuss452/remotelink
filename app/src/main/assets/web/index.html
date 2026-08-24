@@ -14,10 +14,11 @@
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark" aria-hidden="true"><span></span><span></span></div>
-        <div><strong>RemoteLink</strong><small>Android remoto • LAN</small></div>
+        <div><strong>RemoteLink</strong><small>Android remoto • LAN • v0.4 alpha</small></div>
       </div>
       <div class="top-actions">
         <span id="serverBadge" class="status-pill neutral"><i></i> verificando</span>
+        <button id="sidebarToggle" class="icon-button compact" type="button" aria-expanded="true" title="Ocultar painel lateral">⇥</button>
         <button id="disconnectTop" class="ghost danger hidden" type="button">Encerrar sessão</button>
       </div>
     </header>
@@ -25,7 +26,11 @@
     <main class="workspace">
       <section class="viewer-card panel">
         <div class="viewer-head">
-          <div><span class="eyebrow">DISPOSITIVO REMOTO</span><h1 id="viewerTitle">Aguardando conexão</h1></div>
+          <div>
+            <span class="eyebrow">DISPOSITIVO REMOTO</span>
+            <h1 id="viewerTitle">Aguardando conexão</h1>
+            <div class="viewer-subline"><span id="rtcState" class="mini-pill">offline</span><span>WebRTC direto na LAN</span></div>
+          </div>
           <div class="viewer-actions">
             <button id="fitButton" class="icon-button" type="button" disabled title="Ajustar / preencher">↕</button>
             <button id="fullscreenButton" class="icon-button" type="button" disabled title="Tela cheia">⛶</button>
@@ -37,28 +42,36 @@
           <video id="remoteVideo" autoplay playsinline muted></video>
           <div id="screenPlaceholder" class="placeholder">
             <div class="phone-outline"><span class="camera"></span><div class="link-glyph">⌁</div></div>
-            <div><strong>Seu Android aparecerá aqui</strong><p>Pareie este navegador e aprove a sessão no celular.</p></div>
+            <div><strong>Seu Android aparecerá aqui</strong><p>Inicie o acesso no celular, abra este endereço e aprove a sessão.</p></div>
           </div>
           <div id="connectingOverlay" class="connecting hidden">
             <span class="spinner"></span>
-            <strong>Estabelecendo WebRTC</strong>
-            <small id="connectingDetail">Negociando conexão direta na rede local…</small>
+            <strong>Estabelecendo conexão segura</strong>
+            <small id="connectingDetail">Negociando WebRTC na rede local…</small>
           </div>
           <div id="interactionHint" class="interaction-hint hidden">Clique = toque • arraste = deslize • roda = rolagem</div>
         </div>
 
-        <div class="nav-controls">
-          <button id="backButton" class="nav-button" type="button" disabled><span>‹</span><small>Voltar</small></button>
-          <button id="homeButton" class="nav-button" type="button" disabled><span>●</span><small>Início</small></button>
-          <button id="recentsButton" class="nav-button" type="button" disabled><span>▢</span><small>Recentes</small></button>
+        <div class="control-dock">
+          <div class="nav-controls">
+            <button id="backButton" class="nav-button" type="button" disabled><span>‹</span><small>Voltar</small></button>
+            <button id="homeButton" class="nav-button" type="button" disabled><span>●</span><small>Início</small></button>
+            <button id="recentsButton" class="nav-button" type="button" disabled><span>▢</span><small>Recentes</small></button>
+          </div>
+          <div class="quick-stats">
+            <div><span>Latência</span><strong id="latencyStat">—</strong></div>
+            <div><span>Vídeo</span><strong id="resolutionStat">—</strong></div>
+            <div><span>FPS</span><strong id="fpsStat">—</strong></div>
+            <div><span>Bitrate</span><strong id="bitrateStat">—</strong></div>
+          </div>
         </div>
       </section>
 
-      <aside class="side-column">
+      <aside id="sideColumn" class="side-column">
         <section id="pairPanel" class="panel pair-panel">
-          <div class="section-top"><span class="step">01</span><span class="eyebrow">PAREAMENTO SEGURO</span></div>
+          <div class="section-top"><span class="step">01</span><span class="eyebrow">PAREAMENTO</span></div>
           <h2>Conecte ao celular</h2>
-          <p>Digite o código mostrado no RemoteLink. O Android ainda pedirá sua aprovação física antes de liberar a sessão.</p>
+          <p>Digite o código mostrado no RemoteLink. O Android ainda pedirá aprovação física antes de liberar a sessão.</p>
           <form id="pairForm" autocomplete="off">
             <label for="code">Código temporário</label>
             <div class="code-row">
@@ -73,28 +86,27 @@
           </div>
         </section>
 
-        <section class="panel stats-panel">
-          <div class="section-head"><div><span class="eyebrow">SESSÃO</span><h3>Qualidade da conexão</h3></div><span id="rtcState" class="mini-pill">offline</span></div>
-          <div class="stats-grid">
-            <div class="stat"><span>Latência</span><strong id="latencyStat">—</strong></div>
-            <div class="stat"><span>Vídeo</span><strong id="resolutionStat">—</strong></div>
-            <div class="stat"><span>FPS</span><strong id="fpsStat">—</strong></div>
-            <div class="stat"><span>Bitrate</span><strong id="bitrateStat">—</strong></div>
-          </div>
-          <div class="secure-row"><span class="shield">✓</span><div><strong>Mídia protegida por WebRTC</strong><small>Vídeo SRTP • comandos DataChannel/DTLS</small></div></div>
-        </section>
-
         <section class="panel text-panel">
-          <div class="section-head"><div><span class="eyebrow">TECLADO</span><h3>Enviar texto</h3></div></div>
-          <p>Toque primeiro em um campo editável no Android.</p>
+          <div class="section-head"><div><span class="eyebrow">TECLADO</span><h3>Enviar texto</h3></div><span class="mini-pill">beta</span></div>
+          <p>Selecione primeiro um campo editável no Android.</p>
           <div class="text-send-row"><input id="textInput" type="text" maxlength="4000" placeholder="Digite aqui…" disabled><button id="sendTextButton" class="secondary" type="button" disabled>Enviar</button></div>
         </section>
 
-        <section class="security-note"><span>i</span><p><strong>v0.3 alpha LAN-only.</strong> O servidor aceita somente IPv4 privado da sub-rede Wi‑Fi atual. A mídia e os comandos usam WebRTC criptografado; o signaling HTTP local ainda será substituído antes de uma versão estável.</p></section>
+        <section class="panel session-panel">
+          <div class="section-head"><div><span class="eyebrow">SEGURANÇA</span><h3>Sessão local</h3></div><span class="shield">✓</span></div>
+          <div class="secure-copy">
+            <strong>Vídeo e comandos criptografados</strong>
+            <small>SRTP para mídia • DTLS no DataChannel • uma sessão por vez.</small>
+          </div>
+          <div class="session-rule"><span></span><p>O servidor fica vinculado ao IPv4 privado da rede Wi‑Fi atual e não abre portas no roteador.</p></div>
+        </section>
+
+        <section class="security-note"><span>i</span><p><strong>v0.4 alpha LAN-only.</strong> O signaling HTTP local ainda será substituído antes de uma versão estável para redes não confiáveis.</p></section>
       </aside>
     </main>
   </div>
   <script src="/app.js" defer></script>
   <script src="/reconnect.js" defer></script>
+  <script src="/ui.js" defer></script>
 </body>
 </html>
