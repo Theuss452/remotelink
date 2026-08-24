@@ -5,6 +5,9 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.drawable.BitmapDrawable
 import android.media.projection.MediaProjectionManager
 import android.net.ConnectivityManager
 import android.net.LinkProperties
@@ -23,6 +26,8 @@ import app.remotelink.network.LanPolicy
 import app.remotelink.network.LocalControlServer
 import app.remotelink.security.PairingManager
 import app.remotelink.update.UpdateManager
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
 
 class MainActivity : Activity() {
     private val pairing = PairingManager()
@@ -64,7 +69,7 @@ class MainActivity : Activity() {
         findViewById<TextView>(R.id.versionSubtitle).text =
             "Controle Android pelo navegador • v${BuildConfig.VERSION_NAME}"
         findViewById<TextView>(R.id.footerText).text =
-            "LAN-only • sem UPnP • uma sessão por vez • v${BuildConfig.VERSION_NAME}"
+            "LAN-only • QR/HMAC/SAS • uma sessão por vez • v${BuildConfig.VERSION_NAME}"
 
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
@@ -279,14 +284,22 @@ class MainActivity : Activity() {
         }
         val s = LocalControlServer(this, binding, pairing) { request, finish ->
             runOnUiThread {
+                val message = if (request.strongPairing && request.sas != null) {
+                    val sas = request.sas
+                    val pretty = "${sas.substring(0, 3)} ${sas.substring(3)}"
+                    "Pareamento forte solicitado por ${request.remoteIp}.\n\n" +
+                        "SAS: $pretty\n\n" +
+                        "CONFIRA se estes mesmos 6 dígitos aparecem no navegador. Se forem diferentes, recuse.\n\n" +
+                        "Ao aprovar, o navegador poderá iniciar uma sessão WebRTC; o controle ainda depende da Acessibilidade."
+                } else {
+                    "Um navegador em ${request.remoteIp} informou o código temporário correto.\n\n" +
+                        "Este é o modo fallback sem SAS. Se você aprovar, ele poderá iniciar uma sessão WebRTC."
+                }
                 AlertDialog.Builder(this)
-                    .setTitle("Permitir conexão?")
-                    .setMessage(
-                        "Um navegador em ${request.remoteIp} informou o código correto.\n\n" +
-                            "Se você aprovar, ele poderá iniciar uma sessão WebRTC. O controle só funcionará se a permissão de Acessibilidade também estiver ativada."
-                    )
+                    .setTitle(if (request.strongPairing) "Comparar SAS e permitir?" else "Permitir conexão?")
+                    .setMessage(message)
                     .setNegativeButton("Recusar") { _, _ -> finish(false) }
-                    .setPositiveButton("Permitir") { _, _ -> finish(true) }
+                    .setPositiveButton("SAS confere • Permitir") { _, _ -> finish(true) }
                     .setOnCancelListener { finish(false) }
                     .show()
             }
@@ -310,6 +323,7 @@ class MainActivity : Activity() {
         statusText.text = "● Desligado"
         addressText.text = "Endereço aparecerá aqui"
         codeText.text = "Código: —"
+        codeText.setCompoundDrawables(null, null, null, null)
         serverButton.text = "Iniciar acesso local"
         newCodeButton.isEnabled = false
         if (reason != null && !isFinishing && !isDestroyed) {
@@ -357,9 +371,26 @@ class MainActivity : Activity() {
     }
 
     private fun refreshCode() {
-        if (server == null) return
+        val activeServer = server ?: return
+        val binding = serverBinding ?: return
         val w = pairing.newCode()
-        codeText.text = "Código: ${w.code.substring(0,3)} ${w.code.substring(3)}"
+        val baseUrl = "http://${binding.address.hostAddress}:${activeServer.port}/"
+        val strongUrl = "${baseUrl}#pair=${w.strongPairId}.${w.strongSecretB64}"
+        codeText.text = "Pareamento forte por QR • válido por 5 min\nCódigo fallback: ${w.code.substring(0,3)} ${w.code.substring(3)}"
+        try {
+            val size = (240 * resources.displayMetrics.density).toInt().coerceIn(480, 900)
+            val matrix = QRCodeWriter().encode(strongUrl, BarcodeFormat.QR_CODE, size, size)
+            val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+            for (y in 0 until size) {
+                for (x in 0 until size) bitmap.setPixel(x, y, if (matrix[x, y]) Color.BLACK else Color.WHITE)
+            }
+            val drawable = BitmapDrawable(resources, bitmap).apply { setBounds(0, 0, size, size) }
+            codeText.compoundDrawablePadding = (12 * resources.displayMetrics.density).toInt()
+            codeText.setCompoundDrawables(null, drawable, null, null)
+        } catch (_: Exception) {
+            codeText.setCompoundDrawables(null, null, null, null)
+            codeText.append("\nQR indisponível; use o código fallback.")
+        }
     }
 
     private fun updatePermissionState() {
