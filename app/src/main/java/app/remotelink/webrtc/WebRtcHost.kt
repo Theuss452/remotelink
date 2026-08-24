@@ -20,7 +20,13 @@ class WebRtcHost(
     private val onProjectionStopped: () -> Unit
 ) {
     data class SignalCandidate(val sdpMid: String?, val sdpMLineIndex: Int, val candidate: String)
-    private data class CaptureSpec(val width: Int, val height: Int, val fps: Int, val maxBitrateBps: Int)
+    private data class CaptureSpec(
+        val width: Int,
+        val height: Int,
+        val fps: Int,
+        val minBitrateBps: Int,
+        val maxBitrateBps: Int
+    )
 
     private val lock = Any()
     private val eglBase = EglBase.create()
@@ -133,7 +139,8 @@ class WebRtcHost(
         return JSONObject().put("peer", peerState).put("ice", iceState).put("gathering", gatheringState)
             .put("localCandidates", localCandidateCount).put("captureStarted", captureStarted)
             .put("profile", captureProfile).put("width", spec?.width ?: 0).put("height", spec?.height ?: 0)
-            .put("fps", spec?.fps ?: 0).put("maxBitrateBps", spec?.maxBitrateBps ?: 0)
+            .put("fps", spec?.fps ?: 0).put("minBitrateBps", spec?.minBitrateBps ?: 0)
+            .put("maxBitrateBps", spec?.maxBitrateBps ?: 0)
     }
 
     fun setCaptureProfile(sessionHash: String, profile: String): Boolean {
@@ -183,20 +190,22 @@ class WebRtcHost(
     private fun desiredCaptureSpec(): CaptureSpec {
         val dm = context.resources.displayMetrics
         var width = dm.widthPixels.coerceAtLeast(2); var height = dm.heightPixels.coerceAtLeast(2)
-        // Remote control values smoothness over native resolution. The previous
-        // 1600px default could collapse to ~2 FPS on lower-end Android encoders.
-        val (maxEdge, fps, bitrate) = when (captureProfile) {
-            "economy" -> Triple(800, 20, 1_200_000)
-            "balanced" -> Triple(1280, 30, 3_000_000)
-            "high" -> Triple(1600, 30, 5_000_000)
-            else -> Triple(1200, 30, 2_500_000)
+        val spec = when (captureProfile) {
+            "economy" -> Triple(800, 20, 600_000 to 1_500_000)
+            "balanced" -> Triple(1280, 30, 1_200_000 to 3_500_000)
+            "high" -> Triple(1600, 30, 2_000_000 to 6_000_000)
+            else -> Triple(1280, 30, 1_200_000 to 4_000_000)
         }
+        val maxEdge = spec.first
+        val fps = spec.second
+        val minBitrate = spec.third.first
+        val maxBitrate = spec.third.second
         val longest = maxOf(width, height)
         if (longest > maxEdge) {
             val scale = maxEdge.toFloat() / longest.toFloat(); width = (width * scale).toInt(); height = (height * scale).toInt()
         }
         width = (width / 2 * 2).coerceAtLeast(2); height = (height / 2 * 2).coerceAtLeast(2)
-        return CaptureSpec(width, height, fps, bitrate)
+        return CaptureSpec(width, height, fps, minBitrate, maxBitrate)
     }
 
     private fun applySenderPolicy() {
@@ -206,14 +215,13 @@ class WebRtcHost(
             val params = sender.parameters
             params.degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_FRAMERATE
             params.encodings.forEach { encoding ->
+                encoding.minBitrateBps = spec.minBitrateBps
                 encoding.maxBitrateBps = spec.maxBitrateBps
                 encoding.maxFramerate = spec.fps
+                encoding.bitratePriority = 2.0
             }
             sender.parameters = params
-        } catch (_: Exception) {
-            // Some vendor WebRTC builds expose fewer RTP knobs. Capture format
-            // reduction above remains the safe fallback.
-        }
+        } catch (_: Exception) {}
     }
 
     private fun observer() = object : PeerConnection.Observer {
@@ -267,7 +275,7 @@ class WebRtcHost(
         val service = RemoteAccessibilityService.instance ?: run { sendJson(channel, JSONObject().put("type", "control_error").put("error", "accessibility_disabled")); return }
         val ok = when (obj.optString("type")) {
             "tap" -> service.tapNormalized(obj.optDouble("x").toFloat(), obj.optDouble("y").toFloat())
-            "swipe" -> service.swipeNormalized(obj.optDouble("x1").toFloat(), obj.optDouble("y1").toFloat(), obj.optDouble("x2").toFloat(), obj.optDouble("y2").toFloat(), obj.optLong("duration", 220L))
+            "swipe" -> service.swipeNormalized(obj.optDouble("x1").toFloat(), obj.optDouble("y1").toFloat(), obj.optDouble("x2").toFloat(), obj.optDouble("y2").toFloat(), obj.optLong("duration", 180L))
             "back" -> service.back(); "home" -> service.home(); "recents" -> service.recents()
             "text" -> service.setFocusedText(obj.optString("text")); else -> false
         }
