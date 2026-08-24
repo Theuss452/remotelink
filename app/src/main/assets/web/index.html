@@ -14,7 +14,7 @@
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark" aria-hidden="true"><span></span><span></span></div>
-        <div><strong>RemoteLink</strong><small>Android remoto • LAN • v0.6 alpha</small></div>
+        <div><strong>RemoteLink</strong><small>Android remoto • LAN • pareamento forte</small></div>
       </div>
       <div class="top-actions">
         <span id="serverBadge" class="status-pill neutral"><i></i> verificando</span>
@@ -74,9 +74,9 @@
         <section id="pairPanel" class="panel pair-panel">
           <div class="section-top"><span class="step">01</span><span class="eyebrow">PAREAMENTO</span></div>
           <h2>Conecte ao celular</h2>
-          <p>Digite o código mostrado no RemoteLink. O Android ainda pedirá aprovação física antes de liberar a sessão.</p>
+          <p><strong>Recomendado:</strong> abra esta página pelo QR exibido no Android. O RemoteLink validará uma prova HMAC e mostrará um SAS de 6 dígitos para você comparar antes da aprovação.</p>
           <form id="pairForm" autocomplete="off">
-            <label for="code">Código temporário</label>
+            <label for="code">Fallback: código temporário</label>
             <div class="code-row">
               <input id="code" name="code" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" placeholder="000 000" required aria-describedby="message">
               <button id="pairButton" class="primary" type="submit">Conectar</button>
@@ -90,22 +90,23 @@
         </section>
 
         <section class="panel text-panel">
-          <div class="section-head"><div><span class="eyebrow">TECLADO</span><h3>Teclado do Chromebook</h3></div><span class="mini-pill">v0.6</span></div>
+          <div class="section-head"><div><span class="eyebrow">TECLADO</span><h3>Teclado do Chromebook</h3></div><span class="mini-pill">v0.7</span></div>
           <p>Clique primeiro em um campo no Android. Com o Modo controle ativo, caracteres, Backspace, Delete, setas, Home/End, Ctrl+A e Enter são enviados diretamente. Esc sai do Modo controle.</p>
           <div class="text-send-row"><input id="textInput" type="text" maxlength="4000" placeholder="Ou envie um texto completo…" disabled><button id="sendTextButton" class="secondary" type="button" disabled>Enviar</button></div>
         </section>
 
         <section class="panel session-panel">
           <div class="section-head"><div><span class="eyebrow">SEGURANÇA</span><h3>Sessão local</h3></div><span class="shield">✓</span></div>
-          <div class="secure-copy"><strong>Vídeo, comandos e arquivos pelo WebRTC</strong><small>SRTP para mídia • DTLS no DataChannel • uma sessão aprovada por vez.</small></div>
+          <div class="secure-copy"><strong>QR 256-bit + HMAC + SAS + WebRTC</strong><small>Pareamento forte de uso único • SRTP para mídia • DTLS no DataChannel.</small></div>
           <div class="session-rule"><span></span><p>Candidatos ICE do navegador ficam presos ao mesmo IP que foi pareado e aprovado no Android.</p></div>
         </section>
 
-        <section class="security-note"><span>i</span><p><strong>v0.6 alpha LAN-only.</strong> O signaling inicial ainda usa HTTP local; use redes privadas confiáveis. A aprovação física e o token de sessão continuam obrigatórios.</p></section>
+        <section class="security-note"><span>i</span><p><strong>Defesa forte na LAN.</strong> O QR impede brute force do código curto e a prova HMAC/SAS detecta adulterações enquanto o cliente carregado for confiável. O HTML inicial ainda é servido por HTTP local; use redes privadas confiáveis até existir um bootstrap HTTPS/pinado.</p></section>
       </aside>
     </main>
   </div>
   <script src="/app.js" defer></script>
+  <script src="/strong-pair.js" defer></script>
   <script src="/transfer.js" defer></script>
   <script src="/reconnect.js" defer></script>
 </body>
