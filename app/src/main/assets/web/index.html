@@ -18,7 +18,8 @@
       </div>
       <div class="top-actions">
         <span id="serverBadge" class="status-pill neutral"><i></i> verificando</span>
-        <button id="sidebarToggle" class="icon-button compact" type="button" aria-expanded="true" title="Ocultar painel lateral">⇥</button>
+        <input id="sidebarToggle" class="sidebar-toggle-input" type="checkbox" aria-label="Recolher painel lateral">
+        <label for="sidebarToggle" class="icon-button compact sidebar-toggle-label" title="Mostrar ou ocultar painel lateral">⇥</label>
         <button id="disconnectTop" class="ghost danger hidden" type="button">Encerrar sessão</button>
       </div>
     </header>
@@ -107,6 +108,5 @@
   </div>
   <script src="/app.js" defer></script>
   <script src="/reconnect.js" defer></script>
-  <script src="/ui.js" defer></script>
 </body>
 </html>
