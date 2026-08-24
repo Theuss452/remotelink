@@ -2,7 +2,12 @@ package app.remotelink.webrtc
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Point
+import android.hardware.display.DisplayManager
 import android.media.projection.MediaProjection
+import android.os.Handler
+import android.os.Looper
+import android.view.Display
 import app.remotelink.control.RemoteAccessibilityService
 import app.remotelink.transfer.IncomingFileReceiver
 import org.json.JSONObject
@@ -38,6 +43,7 @@ class WebRtcHost(
     private val textureHelper: SurfaceTextureHelper
     private val localCandidates = ConcurrentLinkedQueue<SignalCandidate>()
     private val fileReceiver = IncomingFileReceiver(context.applicationContext)
+    private val watchdogHandler = Handler(Looper.getMainLooper())
 
     @Volatile private var peer: PeerConnection? = null
     @Volatile private var videoSender: RtpSender? = null
@@ -47,6 +53,7 @@ class WebRtcHost(
     @Volatile private var controlAuthenticated = false
     @Volatile private var fileAuthenticated = false
     @Volatile private var lastCommandSeq = 0L
+    @Volatile private var lastHeartbeatAt = 0L
     @Volatile private var captureStarted = false
     @Volatile private var disposed = false
     @Volatile private var captureProfile = "auto"
@@ -55,6 +62,29 @@ class WebRtcHost(
     @Volatile private var iceState = "new"
     @Volatile private var gatheringState = "new"
     @Volatile private var localCandidateCount = 0
+
+    private val watchdogRunnable = object : Runnable {
+        override fun run() {
+            if (!disposed) {
+                val now = System.currentTimeMillis()
+                if (
+                    expectedSessionHash != null &&
+                    controlAuthenticated &&
+                    lastHeartbeatAt > 0L &&
+                    now - lastHeartbeatAt > WATCHDOG_TIMEOUT_MS
+                ) {
+                    synchronized(lock) {
+                        if (
+                            expectedSessionHash != null &&
+                            controlAuthenticated &&
+                            System.currentTimeMillis() - lastHeartbeatAt > WATCHDOG_TIMEOUT_MS
+                        ) closePeerLocked()
+                    }
+                }
+                watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL_MS)
+            }
+        }
+    }
 
     init {
         if (factoryInitialized.compareAndSet(false, true)) {
@@ -85,6 +115,7 @@ class WebRtcHost(
         textureHelper = SurfaceTextureHelper.create("RemoteLink-Capture", eglBase.eglBaseContext)
         capturer.initialize(textureHelper, context.applicationContext, videoSource.capturerObserver)
         videoTrack = factory.createVideoTrack("remotelink-screen", videoSource).apply { setEnabled(true) }
+        watchdogHandler.postDelayed(watchdogRunnable, WATCHDOG_INTERVAL_MS)
     }
 
     fun isCaptureStarted(): Boolean = captureStarted
@@ -98,6 +129,7 @@ class WebRtcHost(
             controlAuthenticated = false
             fileAuthenticated = false
             lastCommandSeq = 0L
+            lastHeartbeatAt = 0L
             localCandidates.clear(); localCandidateCount = 0
             peerState = "new"; iceState = "new"; gatheringState = "new"
 
@@ -133,20 +165,21 @@ class WebRtcHost(
 
     fun connectionState(sessionHash: String): String {
         if (!isCurrentSession(sessionHash)) return "closed"
-        refreshCaptureFormatIfNeeded()
         return peer?.connectionState()?.name?.lowercase() ?: peerState
     }
 
     fun diagnosticState(sessionHash: String): JSONObject {
         if (!isCurrentSession(sessionHash)) return JSONObject().put("peer", "closed").put("ice", "closed")
-        refreshCaptureFormatIfNeeded()
         val spec = activeSpec
+        val heartbeatAge = if (lastHeartbeatAt > 0L) System.currentTimeMillis() - lastHeartbeatAt else -1L
         return JSONObject().put("peer", peerState).put("ice", iceState).put("gathering", gatheringState)
             .put("localCandidates", localCandidateCount).put("captureStarted", captureStarted)
             .put("profile", captureProfile).put("width", spec?.width ?: 0).put("height", spec?.height ?: 0)
             .put("fps", spec?.fps ?: 0).put("minBitrateBps", spec?.minBitrateBps ?: 0)
             .put("maxBitrateBps", spec?.maxBitrateBps ?: 0)
             .put("fileChannelReady", fileAuthenticated)
+            .put("heartbeatAgeMs", heartbeatAge)
+            .put("watchdogTimeoutMs", WATCHDOG_TIMEOUT_MS)
     }
 
     fun setCaptureProfile(sessionHash: String, profile: String): Boolean {
@@ -159,7 +192,9 @@ class WebRtcHost(
     fun dispose() {
         synchronized(lock) {
             if (disposed) return
-            disposed = true; closePeerLocked()
+            disposed = true
+            watchdogHandler.removeCallbacks(watchdogRunnable)
+            closePeerLocked()
             try { if (captureStarted) capturer.stopCapture() } catch (_: Exception) {}
             captureStarted = false; activeSpec = null
             try { capturer.dispose() } catch (_: Exception) {}
@@ -171,50 +206,79 @@ class WebRtcHost(
         }
     }
 
-    private fun ensureCaptureStartedLocked() {
-        if (captureStarted) { refreshCaptureFormatIfNeeded(); return }
-        val spec = desiredCaptureSpec()
-        capturer.startCapture(spec.width, spec.height, spec.fps)
-        activeSpec = spec; captureStarted = true
+    private fun physicalDisplaySize(): Point {
+        val display = context.getSystemService(DisplayManager::class.java)?.getDisplay(Display.DEFAULT_DISPLAY)
+        if (display != null) {
+            @Suppress("DEPRECATION")
+            val metrics = android.util.DisplayMetrics().also { display.getRealMetrics(it) }
+            if (metrics.widthPixels > 0 && metrics.heightPixels > 0) return Point(metrics.widthPixels, metrics.heightPixels)
+        }
+        val dm = context.resources.displayMetrics
+        return Point(dm.widthPixels.coerceAtLeast(2), dm.heightPixels.coerceAtLeast(2))
     }
 
-    private fun refreshCaptureFormatIfNeeded(force: Boolean = false) {
-        if (!captureStarted || disposed) return
-        val wanted = desiredCaptureSpec(); val current = activeSpec
-        if (!force && current == wanted) return
-        try {
-            capturer.changeCaptureFormat(wanted.width, wanted.height, wanted.fps)
-            activeSpec = wanted
-            applySenderPolicy()
-        } catch (_: Exception) {}
+    private fun scaledSize(maxEdge: Int): Pair<Int, Int> {
+        val physical = physicalDisplaySize()
+        var width = physical.x.coerceAtLeast(2)
+        var height = physical.y.coerceAtLeast(2)
+        val longest = maxOf(width, height)
+        if (longest > maxEdge) {
+            val scale = maxEdge.toFloat() / longest.toFloat()
+            width = (width * scale).toInt()
+            height = (height * scale).toInt()
+        }
+        width = (width / 2 * 2).coerceAtLeast(2)
+        height = (height / 2 * 2).coerceAtLeast(2)
+        return width to height
+    }
+
+    private fun ensureCaptureStartedLocked() {
+        if (captureStarted) {
+            applyOutputProfile()
+            return
+        }
+        // Keep MediaProjection capture dimensions stable for the whole permission session.
+        // Quality changes only adapt VideoSource output; this avoids VirtualDisplay churn
+        // and keeps the input coordinate system completely independent of stream quality.
+        val (baseWidth, baseHeight) = scaledSize(BASE_CAPTURE_MAX_EDGE)
+        capturer.startCapture(baseWidth, baseHeight, BASE_CAPTURE_FPS)
+        captureStarted = true
+        applyOutputProfile()
     }
 
     private fun setCaptureProfileInternal(profile: String): Boolean {
         val normalized = profile.lowercase().takeIf { it in setOf("auto", "economy", "balanced", "high", "fluid") }
             ?: return false
         captureProfile = normalized
-        refreshCaptureFormatIfNeeded(force = true)
+        applyOutputProfile()
         applySenderPolicy()
         return true
     }
 
     private fun desiredCaptureSpec(): CaptureSpec {
-        val dm = context.resources.displayMetrics
-        var width = dm.widthPixels.coerceAtLeast(2); var height = dm.heightPixels.coerceAtLeast(2)
-        val spec = when (captureProfile) {
-            "economy" -> Triple(800, 20, 500_000 to 1_500_000)
-            "balanced" -> Triple(1280, 30, 1_000_000 to 3_500_000)
-            "high" -> Triple(1600, 30, 2_000_000 to 6_000_000)
-            "fluid" -> Triple(1080, 60, 1_500_000 to 5_000_000)
-            else -> Triple(1280, 30, 1_000_000 to 4_000_000)
+        val settings = when (captureProfile) {
+            "economy" -> Triple(800, 20, 500_000 to 1_400_000)
+            "balanced" -> Triple(1280, 30, 1_000_000 to 3_200_000)
+            // Slightly lower than the old 1600/6 Mbps profile: several mobile
+            // encoders accumulated frames or produced visual instability there.
+            "high" -> Triple(1440, 30, 1_600_000 to 4_800_000)
+            "fluid" -> Triple(1080, 60, 1_400_000 to 4_500_000)
+            else -> Triple(1280, 30, 900_000 to 3_600_000)
         }
-        val longest = maxOf(width, height)
-        if (longest > spec.first) {
-            val scale = spec.first.toFloat() / longest.toFloat()
-            width = (width * scale).toInt(); height = (height * scale).toInt()
+        val (width, height) = scaledSize(settings.first)
+        return CaptureSpec(width, height, settings.second, settings.third.first, settings.third.second)
+    }
+
+    private fun applyOutputProfile() {
+        if (!captureStarted || disposed) return
+        val wanted = desiredCaptureSpec()
+        try {
+            videoSource.adaptOutputFormat(wanted.width, wanted.height, wanted.fps)
+            activeSpec = wanted
+        } catch (_: Exception) {
+            // Do not recreate the MediaProjection capture on profile failure.
+            // Keeping the last good format is safer than causing visible churn.
         }
-        width = (width / 2 * 2).coerceAtLeast(2); height = (height / 2 * 2).coerceAtLeast(2)
-        return CaptureSpec(width, height, spec.second, spec.third.first, spec.third.second)
     }
 
     private fun applySenderPolicy() {
@@ -227,7 +291,7 @@ class WebRtcHost(
                 encoding.minBitrateBps = spec.minBitrateBps
                 encoding.maxBitrateBps = spec.maxBitrateBps
                 encoding.maxFramerate = spec.fps
-                encoding.bitratePriority = 2.0
+                encoding.bitratePriority = if (captureProfile == "fluid") 2.2 else 2.0
             }
             sender.parameters = params
         } catch (_: Exception) {}
@@ -272,7 +336,11 @@ class WebRtcHost(
 
     private fun controlObserver(channel: DataChannel) = object : DataChannel.Observer {
         override fun onBufferedAmountChange(previousAmount: Long) = Unit
-        override fun onStateChange() { if (channel.state() == DataChannel.State.OPEN) sendJson(channel, JSONObject().put("type", "hello").put("authRequired", true)) }
+        override fun onStateChange() {
+            if (channel.state() == DataChannel.State.OPEN) {
+                sendJson(channel, JSONObject().put("type", "hello").put("authRequired", true))
+            }
+        }
         override fun onMessage(buffer: DataChannel.Buffer?) {
             if (buffer == null || buffer.binary || buffer.data.remaining() > MAX_CONTROL_MESSAGE_BYTES) return
             val bytes = ByteArray(buffer.data.remaining()); buffer.data.get(bytes)
@@ -308,18 +376,27 @@ class WebRtcHost(
         return supplied.length in 32..128 && expected != null && constantTimeEquals(expected, sha256Hex(supplied))
     }
 
+    private fun touchHeartbeat() {
+        lastHeartbeatAt = System.currentTimeMillis()
+    }
+
     private fun handleControlMessage(channel: DataChannel, raw: String) {
         val obj = try { JSONObject(raw) } catch (_: Exception) { return }
         when (obj.optString("type")) {
             "auth" -> {
                 val ok = authenticate(obj.optString("token"))
                 controlAuthenticated = ok; lastCommandSeq = 0L
+                if (ok) touchHeartbeat()
                 sendJson(channel, JSONObject().put("type", if (ok) "auth_ok" else "auth_failed").put("controlReady", RemoteAccessibilityService.instance != null))
                 if (!ok) channel.close()
             }
-            "ping" -> if (controlAuthenticated) sendJson(channel, JSONObject().put("type", "pong").put("id", obj.optLong("id")))
+            "ping" -> if (controlAuthenticated) {
+                touchHeartbeat()
+                sendJson(channel, JSONObject().put("type", "pong").put("id", obj.optLong("id")))
+            }
             else -> {
                 if (!controlAuthenticated) return
+                touchHeartbeat()
                 val seq = obj.optLong("seq", -1L); if (seq <= 0L || seq <= lastCommandSeq) return; lastCommandSeq = seq
                 if (obj.optString("type") == "capture_profile") {
                     val ok = setCaptureProfileInternal(obj.optString("profile"))
@@ -390,7 +467,7 @@ class WebRtcHost(
 
     private fun closePeerLocked() {
         RemoteAccessibilityService.instance?.cancelRemoteDrag(); fileReceiver.cancel()
-        controlAuthenticated = false; fileAuthenticated = false; lastCommandSeq = 0L
+        controlAuthenticated = false; fileAuthenticated = false; lastCommandSeq = 0L; lastHeartbeatAt = 0L
         peerState = "closed"; iceState = "closed"; gatheringState = "complete"
         listOf(controlChannel, fileChannel).forEach { channel ->
             try { channel?.unregisterObserver() } catch (_: Exception) {}
@@ -418,5 +495,12 @@ class WebRtcHost(
     private fun sha256Hex(value:String):String=MessageDigest.getInstance("SHA-256").digest(value.toByteArray(StandardCharsets.UTF_8)).joinToString(""){"%02x".format(it)}
     private fun constantTimeEquals(a:String,b:String):Boolean=MessageDigest.isEqual(a.toByteArray(StandardCharsets.UTF_8),b.toByteArray(StandardCharsets.UTF_8))
 
-    companion object { private const val MAX_CONTROL_MESSAGE_BYTES=16*1024; private val factoryInitialized=AtomicBoolean(false) }
+    companion object {
+        private const val MAX_CONTROL_MESSAGE_BYTES = 16 * 1024
+        private const val BASE_CAPTURE_MAX_EDGE = 1440
+        private const val BASE_CAPTURE_FPS = 60
+        private const val WATCHDOG_INTERVAL_MS = 10_000L
+        private const val WATCHDOG_TIMEOUT_MS = 30_000L
+        private val factoryInitialized = AtomicBoolean(false)
+    }
 }
