@@ -101,8 +101,17 @@ jobs:
         if: steps.signing.outputs.enabled == 'true'
         shell: bash
         run: |
-          apksigner verify --verbose --print-certs RemoteLink-v0.8-alpha-release.apk
-          keytool -printcert -jarfile RemoteLink-v0.8-alpha-release.apk
+          APKSIGNER="$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner"
+          if [[ ! -x "$APKSIGNER" ]]; then
+            APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -maxdepth 2 -type f -name apksigner -perm -111 | sort -V | tail -n 1)"
+          fi
+          if [[ -z "$APKSIGNER" || ! -x "$APKSIGNER" ]]; then
+            echo "apksigner não foi encontrado no Android SDK." >&2
+            find "$ANDROID_SDK_ROOT/build-tools" -maxdepth 2 -type f -name 'apksigner*' -print || true
+            exit 1
+          fi
+          echo "Usando apksigner: $APKSIGNER"
+          "$APKSIGNER" verify --verbose --print-certs RemoteLink-v0.8-alpha-release.apk
 
       - name: Generate direct update manifest
         if: steps.signing.outputs.enabled == 'true'
