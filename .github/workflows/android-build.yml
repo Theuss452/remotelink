@@ -43,7 +43,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RemoteLink-v0.3-alpha-debug
-          path: RemoteLink-v0.3-alpha-debug.apk
+          name: RemoteLink-v0.4-alpha-debug
+          path: RemoteLink-v0.4-alpha-debug.apk
           if-no-files-found: error
           retention-days: 14
