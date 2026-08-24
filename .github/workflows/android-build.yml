@@ -48,12 +48,12 @@ jobs:
         run: |
           printf 'sdk.dir=%s\n' "$ANDROID_SDK_ROOT" > local.properties
           gradle --no-daemon --stacktrace assembleDebug
-          cp -f app/build/outputs/apk/debug/app-debug.apk RemoteLink-v0.5-alpha-debug.apk
+          cp -f app/build/outputs/apk/debug/app-debug.apk RemoteLink-v0.5.1-alpha-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RemoteLink-v0.5-alpha-debug
-          path: RemoteLink-v0.5-alpha-debug.apk
+          name: RemoteLink-v0.5.1-alpha-debug
+          path: RemoteLink-v0.5.1-alpha-debug.apk
           if-no-files-found: error
           retention-days: 14
