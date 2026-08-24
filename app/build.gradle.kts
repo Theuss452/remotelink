@@ -81,4 +81,5 @@ kotlin {
 
 dependencies {
     implementation("io.github.webrtc-sdk:android:144.7559.12")
+    implementation("androidx.core:core:1.19.0")
 }
