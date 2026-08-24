@@ -54,16 +54,12 @@ async function waitForCaptureReady(timeoutMs=90000){
 el.code.addEventListener('input',()=>{const d=el.code.value.replace(/\D/g,'').slice(0,6);el.code.value=d.length>3?`${d.slice(0,3)} ${d.slice(3)}`:d;});
 el.form.addEventListener('submit',async ev=>{
   ev.preventDefault();
-
-  // If Android already approved this browser, reuse that high-entropy session.
-  // A transient MediaProjection/WebRTC race must never force a second pairing code.
   if(token){
     el.pairButton.disabled=true;el.pairButton.textContent='Conectando…';
     try{await startWebRtc();setMessage('Sessão reconectada.','success');}
     catch(e){setMessage(e.message||'Falha ao reconectar.','error');el.pairButton.disabled=false;el.pairButton.textContent='Tentar novamente';}
     return;
   }
-
   const code=el.code.value.replace(/\D/g,'');if(code.length!==6)return setMessage('Digite os 6 dígitos.','error');
   el.pairButton.disabled=true;setMessage('Validando código…');
   try{
@@ -102,6 +98,16 @@ function preferHardwareFriendlyVideoCodec(transceiver){
   }catch{}
 }
 
+function tuneReceiverForLowLatency(receiver){
+  if(!receiver)return;
+  try{
+    if('jitterBufferTarget' in receiver) receiver.jitterBufferTarget=0;
+  }catch{}
+  try{
+    if('playoutDelayHint' in receiver) receiver.playoutDelayHint=0;
+  }catch{}
+}
+
 async function startWebRtc(){
   if(!token)throw new Error('Sessão de pareamento ausente.');
   if(!('RTCPeerConnection'in window))throw new Error('Este navegador não oferece WebRTC.');
@@ -115,8 +121,10 @@ async function startWebRtc(){
   pc=new RTCPeerConnection({iceServers:[],iceTransportPolicy:'all',bundlePolicy:'max-bundle'});
   const videoTransceiver=pc.addTransceiver('video',{direction:'recvonly'});
   preferHardwareFriendlyVideoCodec(videoTransceiver);
+  tuneReceiverForLowLatency(videoTransceiver.receiver);
   control=pc.createDataChannel('control',{ordered:true});bindControlChannel(control);
   pc.ontrack=ev=>{
+    tuneReceiverForLowLatency(ev.receiver);
     const stream=ev.streams?.[0]||new MediaStream([ev.track]);
     el.video.srcObject=stream;el.video.play().catch(()=>{});
     el.placeholder.classList.add('hidden');el.stage.classList.add('streaming');el.title.textContent='Android conectado';
@@ -136,6 +144,7 @@ async function startWebRtc(){
     throw new Error(data.detail||'Falha ao criar a sessão WebRTC.');
   }
   await pc.setRemoteDescription({type:'answer',sdp:data.sdp});answerInstalled=true;
+  pc.getReceivers().forEach(tuneReceiverForLowLatency);
   await Promise.allSettled(browserCandidates.splice(0).map(postBrowserCandidate));startRemoteCandidatePolling();startStatePolling();startStats();
 }
 
@@ -143,12 +152,12 @@ async function postBrowserCandidate(c){if(!token||!c?.candidate)return;await fet
 function startRemoteCandidatePolling(){
   clearInterval(remoteCandidateTimer);remoteCandidateTimer=setInterval(async()=>{
     if(!pc||!token)return;try{const r=await fetch('/api/webrtc/candidates',{headers:authHeaders(),cache:'no-store'});if(!r.ok)return;const d=await r.json();for(const c of d.candidates||[]){try{await pc.addIceCandidate({candidate:c.candidate,sdpMid:c.sdpMid,sdpMLineIndex:c.sdpMLineIndex});}catch{}}}catch{}
-  },350);
+  },300);
 }
 function startStatePolling(){
   clearInterval(stateTimer);stateTimer=setInterval(async()=>{
     if(!token)return;try{const r=await fetch('/api/webrtc/state',{headers:authHeaders(),cache:'no-store'});if(!r.ok)return;const d=await r.json();updateReadiness(d.captureReady,d.accessibilityReady);if(channelAuthenticated&&control?.readyState==='open')setControlEnabled(!!d.accessibilityReady);}catch{}
-  },1500);
+  },1200);
 }
 
 function bindControlChannel(ch){
@@ -184,21 +193,48 @@ function normalizedPoint(clientX,clientY){
   const displayW=vw*scale,displayH=vh*scale,offX=(rect.width-displayW)/2,offY=(rect.height-displayH)/2;
   const x=(clientX-rect.left-offX)/displayW,y=(clientY-rect.top-offY)/displayH;if(x<0||x>1||y<0||y>1)return null;return{x,y};
 }
-el.stage.addEventListener('pointerdown',ev=>{if(!controlReady||!el.stage.classList.contains('streaming'))return;const p=normalizedPoint(ev.clientX,ev.clientY);if(!p)return;pointerStart={...p,px:ev.clientX,py:ev.clientY,at:performance.now(),id:ev.pointerId};try{el.stage.setPointerCapture(ev.pointerId);}catch{}ev.preventDefault();});
+
+el.stage.addEventListener('pointerdown',ev=>{
+  if(!controlReady||!el.stage.classList.contains('streaming'))return;
+  const p=normalizedPoint(ev.clientX,ev.clientY);if(!p)return;
+  pointerStart={...p,px:ev.clientX,py:ev.clientY,at:performance.now(),id:ev.pointerId,lastX:p.x,lastY:p.y,lastPx:ev.clientX,lastPy:ev.clientY,lastSent:performance.now(),moved:false};
+  try{el.stage.setPointerCapture(ev.pointerId);}catch{}
+  ev.preventDefault();
+});
+
+el.stage.addEventListener('pointermove',ev=>{
+  const drag=pointerStart;if(!drag||drag.id!==ev.pointerId||!controlReady)return;
+  const now=performance.now();
+  if(now-drag.lastSent<55)return;
+  const p=normalizedPoint(ev.clientX,ev.clientY);if(!p)return;
+  const dist=Math.hypot(ev.clientX-drag.lastPx,ev.clientY-drag.lastPy);
+  if(dist<8)return;
+  drag.moved=true;
+  sendControl({type:'swipe',x1:drag.lastX,y1:drag.lastY,x2:p.x,y2:p.y,duration:85});
+  drag.lastX=p.x;drag.lastY=p.y;drag.lastPx=ev.clientX;drag.lastPy=ev.clientY;drag.lastSent=now;
+  ev.preventDefault();
+});
+
 el.stage.addEventListener('pointerup',ev=>{
-  if(!pointerStart||pointerStart.id!==ev.pointerId)return;const end=normalizedPoint(ev.clientX,ev.clientY),start=pointerStart;pointerStart=null;if(!end)return;
-  const distPx=Math.hypot(ev.clientX-start.px,ev.clientY-start.py),heldMs=performance.now()-start.at;
-  if(distPx<10&&heldMs<550)sendControl({type:'tap',x:end.x,y:end.y});
+  if(!pointerStart||pointerStart.id!==ev.pointerId)return;
+  const end=normalizedPoint(ev.clientX,ev.clientY),start=pointerStart;pointerStart=null;if(!end)return;
+  const totalDist=Math.hypot(ev.clientX-start.px,ev.clientY-start.py),heldMs=performance.now()-start.at;
+  if(!start.moved&&totalDist<10&&heldMs<550){sendControl({type:'tap',x:end.x,y:end.y});}
   else{
-    // Remote gestures should follow the pointer quickly; replaying the full time
-    // the user held the mouse made swipes feel delayed by hundreds of ms.
-    const duration=Math.max(100,Math.min(360,120+distPx*.32));
-    sendControl({type:'swipe',x1:start.x,y1:start.y,x2:end.x,y2:end.y,duration:Math.round(duration)});
+    const tailDist=Math.hypot(ev.clientX-start.lastPx,ev.clientY-start.lastPy);
+    if(tailDist>=5)sendControl({type:'swipe',x1:start.lastX,y1:start.lastY,x2:end.x,y2:end.y,duration:80});
   }
   ev.preventDefault();
 });
-el.stage.addEventListener('pointercancel',()=>{pointerStart=null;});el.stage.addEventListener('contextmenu',ev=>ev.preventDefault());
-el.stage.addEventListener('wheel',ev=>{if(!controlReady||!el.stage.classList.contains('streaming'))return;const d=Math.sign(ev.deltaY);if(!d)return;if(d>0)sendControl({type:'swipe',x1:.5,y1:.68,x2:.5,y2:.32,duration:180});else sendControl({type:'swipe',x1:.5,y1:.32,x2:.5,y2:.68,duration:180});ev.preventDefault();},{passive:false});
+el.stage.addEventListener('pointercancel',()=>{pointerStart=null;});
+el.stage.addEventListener('contextmenu',ev=>ev.preventDefault());
+el.stage.addEventListener('wheel',ev=>{
+  if(!controlReady||!el.stage.classList.contains('streaming'))return;
+  const d=Math.sign(ev.deltaY);if(!d)return;
+  if(d>0)sendControl({type:'swipe',x1:.5,y1:.72,x2:.5,y2:.28,duration:115});
+  else sendControl({type:'swipe',x1:.5,y1:.28,x2:.5,y2:.72,duration:115});
+  ev.preventDefault();
+},{passive:false});
 
 el.fullscreen.addEventListener('click',async()=>{try{if(!document.fullscreenElement)await el.stage.requestFullscreen();else await document.exitFullscreen();}catch{}});
 el.fit.addEventListener('click',()=>{fitMode=fitMode==='contain'?'cover':'contain';el.video.style.objectFit=fitMode;el.fit.textContent=fitMode==='contain'?'↕':'↔';el.fit.title=fitMode==='contain'?'Preencher tela':'Ajustar tela';});
@@ -211,7 +247,7 @@ function startStats(){
       if(inbound){const w=inbound.frameWidth||el.video.videoWidth,h=inbound.frameHeight||el.video.videoHeight;el.resolution.textContent=w&&h?`${w}×${h}`:'—';el.fps.textContent=inbound.framesPerSecond?`${Math.round(inbound.framesPerSecond)}`:'—';const now=performance.now();if(lastBytes!=null&&inbound.bytesReceived!=null){const seconds=(now-lastBytesAt)/1000,mbps=((inbound.bytesReceived-lastBytes)*8/seconds)/1_000_000;el.bitrate.textContent=`${Math.max(0,mbps).toFixed(1)} Mb/s`;}lastBytes=inbound.bytesReceived;lastBytesAt=now;}
       if(control?.readyState==='open'&&channelAuthenticated){const id=Date.now();pings.set(id,performance.now());control.send(JSON.stringify({type:'ping',id}));setTimeout(()=>pings.delete(id),10000);}
     }catch{}
-  },1500);
+  },1200);
 }
 
 async function disconnect(invalidateSession){
