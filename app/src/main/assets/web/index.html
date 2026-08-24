@@ -90,10 +90,11 @@
           <div class="text-send-row"><input id="textInput" type="text" maxlength="4000" placeholder="Digite aqui…" disabled><button id="sendTextButton" class="secondary" type="button" disabled>Enviar</button></div>
         </section>
 
-        <section class="security-note"><span>i</span><p><strong>v0.2 alpha LAN-only.</strong> O servidor aceita somente IPv4 privado da sub-rede Wi‑Fi atual. O signaling ainda usa HTTP local, então esta alpha não é a versão final para Wi‑Fi não confiável.</p></section>
+        <section class="security-note"><span>i</span><p><strong>v0.3 alpha LAN-only.</strong> O servidor aceita somente IPv4 privado da sub-rede Wi‑Fi atual. A mídia e os comandos usam WebRTC criptografado; o signaling HTTP local ainda será substituído antes de uma versão estável.</p></section>
       </aside>
     </main>
   </div>
   <script src="/app.js" defer></script>
+  <script src="/reconnect.js" defer></script>
 </body>
 </html>
