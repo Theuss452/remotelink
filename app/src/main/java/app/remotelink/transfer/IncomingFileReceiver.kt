@@ -2,14 +2,12 @@ package app.remotelink.transfer
 
 import android.content.ContentValues
 import android.content.Context
-import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
-import java.io.OutputStream
 
 class IncomingFileReceiver(private val context: Context) {
     data class SavedFile(val name: String, val location: String, val size: Long)
@@ -31,7 +29,6 @@ class IncomingFileReceiver(private val context: Context) {
         if (active != null) return "transfer_busy"
         if (!ID_REGEX.matches(id)) return "invalid_id"
         if (size !in 1..MAX_FILE_BYTES) return "invalid_size"
-
         val name = sanitizeName(rawName) ?: return "invalid_name"
         val mime = sanitizeMime(rawMime)
         val temp = File.createTempFile("remotelink-", ".part", context.cacheDir)
@@ -58,14 +55,10 @@ class IncomingFileReceiver(private val context: Context) {
     fun finish(id: String): Result<SavedFile> {
         val transfer = active ?: return Result.failure(IllegalStateException("no_transfer"))
         if (transfer.id != id) return Result.failure(IllegalArgumentException("id_mismatch"))
-        if (transfer.received != transfer.expectedSize) {
-            return Result.failure(IllegalStateException("size_mismatch"))
-        }
-
+        if (transfer.received != transfer.expectedSize) return Result.failure(IllegalStateException("size_mismatch"))
         active = null
         return try {
-            transfer.output.flush()
-            transfer.output.close()
+            transfer.output.flush(); transfer.output.close()
             val saved = persist(transfer)
             transfer.tempFile.delete()
             Result.success(saved)
@@ -84,33 +77,26 @@ class IncomingFileReceiver(private val context: Context) {
         transfer.tempFile.delete()
     }
 
-    private fun persist(transfer: ActiveTransfer): SavedFile {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            persistToDownloads(transfer)
-        } else {
-            persistToAppDownloads(transfer)
-        }
-    }
+    private fun persist(transfer: ActiveTransfer): SavedFile =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) persistToDownloads(transfer)
+        else persistToAppDownloads(transfer)
 
     private fun persistToDownloads(transfer: ActiveTransfer): SavedFile {
         val resolver = context.contentResolver
         val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         val values = ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, transfer.name)
-            put(MediaStore.Downloads.MIME_TYPE, transfer.mime)
-            put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/RemoteLink")
-            put(MediaStore.Downloads.IS_PENDING, 1)
+            put(MediaStore.MediaColumns.DISPLAY_NAME, transfer.name)
+            put(MediaStore.MediaColumns.MIME_TYPE, transfer.mime)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/RemoteLink")
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
-        val uri = resolver.insert(collection, values)
-            ?: throw IllegalStateException("media_store_insert_failed")
-
+        val uri = resolver.insert(collection, values) ?: throw IllegalStateException("media_store_insert_failed")
         try {
             resolver.openOutputStream(uri, "w").use { output ->
                 requireNotNull(output) { "media_store_open_failed" }
                 transfer.tempFile.inputStream().buffered().use { input -> input.copyTo(output, 64 * 1024) }
             }
-            val publish = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
-            resolver.update(uri, publish, null, null)
+            resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
             return SavedFile(transfer.name, uri.toString(), transfer.expectedSize)
         } catch (e: Exception) {
             try { resolver.delete(uri, null, null) } catch (_: Exception) {}
@@ -119,8 +105,7 @@ class IncomingFileReceiver(private val context: Context) {
     }
 
     private fun persistToAppDownloads(transfer: ActiveTransfer): SavedFile {
-        val base = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-            ?: context.filesDir
+        val base = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
         val dir = File(base, "RemoteLink").apply { mkdirs() }
         val output = uniqueFile(dir, transfer.name)
         transfer.tempFile.inputStream().buffered().use { input ->
@@ -143,11 +128,7 @@ class IncomingFileReceiver(private val context: Context) {
     }
 
     private fun sanitizeName(raw: String): String? {
-        val clean = raw
-            .replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_")
-            .trim()
-            .trim('.')
-            .take(128)
+        val clean = raw.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_").trim().trim('.').take(128)
         if (clean.isBlank() || clean == "." || clean == "..") return null
         return clean
     }
