@@ -47,10 +47,11 @@
                     android:textStyle="bold" />
 
                 <TextView
+                    android:id="@+id/versionSubtitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="2dp"
-                    android:text="Controle Android pelo navegador • v0.5 alpha"
+                    android:text="Controle Android pelo navegador"
                     android:textColor="#7F8DA4"
                     android:textSize="12sp" />
             </LinearLayout>
@@ -63,7 +64,7 @@
             android:layout_marginTop="22dp"
             android:background="@drawable/bg_status_banner"
             android:padding="15dp"
-            android:text="Proteção ativa • WebRTC criptografado, candidato ICE preso ao navegador aprovado, uma sessão por vez e revogação imediata pela notificação."
+            android:text="Proteção ativa • WebRTC criptografado, candidato ICE preso ao navegador aprovado, uma sessão por vez, fail-closed ao trocar de Wi‑Fi e revogação imediata."
             android:textColor="#E4C985"
             android:textSize="12sp" />
 
@@ -99,6 +100,21 @@
         </LinearLayout>
 
         <LinearLayout
+            android:id="@+id/updatePanel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical">
+
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ATUALIZAÇÕES" android:textColor="#75849C" android:textSize="10sp" android:textStyle="bold" />
+            <TextView android:id="@+id/updateTitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="RemoteLink atualizado" android:textColor="#F2F5FA" android:textSize="18sp" android:textStyle="bold" />
+            <TextView android:id="@+id/updateStatusText" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="7dp" android:text="Verificação segura por HTTPS + SHA‑256 + certificado de assinatura." android:textColor="#94A0B2" android:textSize="12sp" />
+            <Button android:id="@+id/checkUpdateButton" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginTop="16dp" android:background="@drawable/bg_secondary_button" android:text="Verificar atualização" android:textAllCaps="false" android:textColor="#E6ECF5" android:textSize="14sp" />
+            <Switch android:id="@+id/autoUpdateSwitch" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:text="Baixar atualizações automaticamente ao abrir o app" android:textColor="#C8D1DF" android:textSize="12sp" />
+        </LinearLayout>
+
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="14dp"
@@ -110,11 +126,12 @@
         </LinearLayout>
 
         <TextView
+            android:id="@+id/footerText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="18dp"
             android:gravity="center"
-            android:text="LAN-only • sem UPnP • uma sessão por vez • v0.5"
+            android:text="LAN-only • sem UPnP • uma sessão por vez"
             android:textColor="#59667A"
             android:textSize="10sp" />
     </LinearLayout>
