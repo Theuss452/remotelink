@@ -14,7 +14,7 @@
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark" aria-hidden="true"><span></span><span></span></div>
-        <div><strong>RemoteLink</strong><small>Android remoto • LAN • v0.5.3 alpha</small></div>
+        <div><strong>RemoteLink</strong><small>Android remoto • LAN • v0.6 alpha</small></div>
       </div>
       <div class="top-actions">
         <span id="serverBadge" class="status-pill neutral"><i></i> verificando</span>
@@ -90,25 +90,23 @@
         </section>
 
         <section class="panel text-panel">
-          <div class="section-head"><div><span class="eyebrow">TECLADO</span><h3>Teclado do Chromebook</h3></div><span class="mini-pill">v0.5.3</span></div>
+          <div class="section-head"><div><span class="eyebrow">TECLADO</span><h3>Teclado do Chromebook</h3></div><span class="mini-pill">v0.6</span></div>
           <p>Clique primeiro em um campo no Android. Com o Modo controle ativo, caracteres, Backspace, Delete, setas, Home/End, Ctrl+A e Enter são enviados diretamente. Esc sai do Modo controle.</p>
           <div class="text-send-row"><input id="textInput" type="text" maxlength="4000" placeholder="Ou envie um texto completo…" disabled><button id="sendTextButton" class="secondary" type="button" disabled>Enviar</button></div>
         </section>
 
         <section class="panel session-panel">
           <div class="section-head"><div><span class="eyebrow">SEGURANÇA</span><h3>Sessão local</h3></div><span class="shield">✓</span></div>
-          <div class="secure-copy">
-            <strong>Vídeo e comandos criptografados</strong>
-            <small>SRTP para mídia • DTLS no DataChannel • uma sessão por vez.</small>
-          </div>
+          <div class="secure-copy"><strong>Vídeo, comandos e arquivos pelo WebRTC</strong><small>SRTP para mídia • DTLS no DataChannel • uma sessão aprovada por vez.</small></div>
           <div class="session-rule"><span></span><p>Candidatos ICE do navegador ficam presos ao mesmo IP que foi pareado e aprovado no Android.</p></div>
         </section>
 
-        <section class="security-note"><span>i</span><p><strong>v0.5.3 alpha LAN-only.</strong> O signaling inicial ainda usa HTTP local; não trate redes Wi‑Fi públicas como confiáveis. A aprovação física e o token de sessão continuam obrigatórios.</p></section>
+        <section class="security-note"><span>i</span><p><strong>v0.6 alpha LAN-only.</strong> O signaling inicial ainda usa HTTP local; use redes privadas confiáveis. A aprovação física e o token de sessão continuam obrigatórios.</p></section>
       </aside>
     </main>
   </div>
   <script src="/app.js" defer></script>
+  <script src="/transfer.js" defer></script>
   <script src="/reconnect.js" defer></script>
 </body>
 </html>
