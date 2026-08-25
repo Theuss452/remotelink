@@ -167,6 +167,7 @@ class LocalControlServer(
             method == "GET" && target == "/" -> asset(socket, "web/index.html", "text/html; charset=utf-8")
             method == "GET" && target == "/styles.css" -> asset(socket, "web/styles.css", "text/css; charset=utf-8")
             method == "GET" && target == "/app.js" -> asset(socket, "web/app.js", "application/javascript; charset=utf-8")
+            method == "GET" && target == "/stability.js" -> asset(socket, "web/stability.js", "application/javascript; charset=utf-8")
             method == "GET" && target == "/strong-pair.js" -> asset(socket, "web/strong-pair.js", "application/javascript; charset=utf-8")
             method == "GET" && target == "/reconnect.js" -> asset(socket, "web/reconnect.js", "application/javascript; charset=utf-8")
             method == "GET" && target == "/transfer.js" -> asset(socket, "web/transfer.js", "application/javascript; charset=utf-8")
