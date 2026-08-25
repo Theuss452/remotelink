@@ -7,7 +7,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.graphics.drawable.BitmapDrawable
 import android.media.projection.MediaProjectionManager
 import android.net.ConnectivityManager
 import android.net.LinkProperties
@@ -18,6 +17,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.View
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.Switch
 import android.widget.TextView
 import app.remotelink.capture.ScreenCaptureService
@@ -42,6 +42,7 @@ class MainActivity : Activity() {
     private lateinit var statusText: TextView
     private lateinit var addressText: TextView
     private lateinit var codeText: TextView
+    private lateinit var qrImage: ImageView
     private lateinit var captureStatus: TextView
     private lateinit var serverButton: Button
     private lateinit var newCodeButton: Button
@@ -56,6 +57,7 @@ class MainActivity : Activity() {
         statusText = findViewById(R.id.statusText)
         addressText = findViewById(R.id.addressText)
         codeText = findViewById(R.id.codeText)
+        qrImage = findViewById(R.id.qrImage)
         captureStatus = findViewById(R.id.captureStatusText)
         serverButton = findViewById(R.id.serverButton)
         newCodeButton = findViewById(R.id.newCodeButton)
@@ -251,9 +253,7 @@ class MainActivity : Activity() {
                     "O controle só deve ser ativado quando você pretende usar acesso remoto e pode ser desativado nas configurações do Android a qualquer momento."
             )
             .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Entendi e continuar") { _, _ ->
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            }
+            .setPositiveButton("Entendi e continuar") { _, _ -> startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
             .show()
     }
 
@@ -299,7 +299,7 @@ class MainActivity : Activity() {
                     .setTitle(if (request.strongPairing) "Comparar SAS e permitir?" else "Permitir conexão?")
                     .setMessage(message)
                     .setNegativeButton("Recusar") { _, _ -> finish(false) }
-                    .setPositiveButton("SAS confere • Permitir") { _, _ -> finish(true) }
+                    .setPositiveButton(if (request.strongPairing) "SAS confere • Permitir" else "Permitir") { _, _ -> finish(true) }
                     .setOnCancelListener { finish(false) }
                     .show()
             }
@@ -323,7 +323,8 @@ class MainActivity : Activity() {
         statusText.text = "● Desligado"
         addressText.text = "Endereço aparecerá aqui"
         codeText.text = "Código: —"
-        codeText.setCompoundDrawables(null, null, null, null)
+        qrImage.setImageDrawable(null)
+        qrImage.visibility = View.GONE
         serverButton.text = "Iniciar acesso local"
         newCodeButton.isEnabled = false
         if (reason != null && !isFinishing && !isDestroyed) {
@@ -344,8 +345,7 @@ class MainActivity : Activity() {
             override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) = verifyActiveNetworkAsync()
         }
         networkCallback = callback
-        try { cm.registerDefaultNetworkCallback(callback) }
-        catch (_: Exception) { networkCallback = null }
+        try { cm.registerDefaultNetworkCallback(callback) } catch (_: Exception) { networkCallback = null }
     }
 
     private fun unregisterNetworkGuard() {
@@ -354,9 +354,7 @@ class MainActivity : Activity() {
         try { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback) } catch (_: Exception) {}
     }
 
-    private fun verifyActiveNetworkAsync() {
-        runOnUiThread { verifyActiveNetwork() }
-    }
+    private fun verifyActiveNetworkAsync() { runOnUiThread { verifyActiveNetwork() } }
 
     private fun verifyActiveNetwork() {
         val expected = serverBinding ?: return
@@ -376,19 +374,22 @@ class MainActivity : Activity() {
         val w = pairing.newCode()
         val baseUrl = "http://${binding.address.hostAddress}:${activeServer.port}/"
         val strongUrl = "${baseUrl}#pair=${w.strongPairId}.${w.strongSecretB64}"
-        codeText.text = "Pareamento forte por QR • válido por 5 min\nCódigo fallback: ${w.code.substring(0,3)} ${w.code.substring(3)}"
+        codeText.text = "QR forte • válido por 5 min\nFallback: ${w.code.substring(0,3)} ${w.code.substring(3)}"
         try {
-            val size = (240 * resources.displayMetrics.density).toInt().coerceIn(480, 900)
+            val size = 720
             val matrix = QRCodeWriter().encode(strongUrl, BarcodeFormat.QR_CODE, size, size)
-            val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+            val pixels = IntArray(size * size)
+            var index = 0
             for (y in 0 until size) {
-                for (x in 0 until size) bitmap.setPixel(x, y, if (matrix[x, y]) Color.BLACK else Color.WHITE)
+                for (x in 0 until size) pixels[index++] = if (matrix[x, y]) Color.BLACK else Color.WHITE
             }
-            val drawable = BitmapDrawable(resources, bitmap).apply { setBounds(0, 0, size, size) }
-            codeText.compoundDrawablePadding = (12 * resources.displayMetrics.density).toInt()
-            codeText.setCompoundDrawables(null, drawable, null, null)
+            val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+            bitmap.setPixels(pixels, 0, size, 0, 0, size, size)
+            qrImage.setImageBitmap(bitmap)
+            qrImage.visibility = View.VISIBLE
         } catch (_: Exception) {
-            codeText.setCompoundDrawables(null, null, null, null)
+            qrImage.setImageDrawable(null)
+            qrImage.visibility = View.GONE
             codeText.append("\nQR indisponível; use o código fallback.")
         }
     }
