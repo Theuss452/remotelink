@@ -32,6 +32,7 @@ jobs:
       - name: Validate browser scripts
         run: |
           node --check app/src/main/assets/web/app.js
+          node --check app/src/main/assets/web/stability.js
           node --check app/src/main/assets/web/strong-pair.js
           node --check app/src/main/assets/web/transfer.js
           node --check app/src/main/assets/web/reconnect.js
@@ -42,9 +43,9 @@ jobs:
       - name: Build direct debug APK
         run: |
           gradle --no-daemon --stacktrace assembleDirectDebug
-          cp app/build/outputs/apk/direct/debug/app-direct-debug.apk RemoteLink-v0.9-alpha-direct-debug.apk
+          cp app/build/outputs/apk/direct/debug/app-direct-debug.apk RemoteLink-v0.9.1-alpha-direct-debug.apk
       - uses: actions/upload-artifact@v4
-        with: {name: RemoteLink-v0.9-alpha-direct-debug, path: RemoteLink-v0.9-alpha-direct-debug.apk, retention-days: 14}
+        with: {name: RemoteLink-v0.9.1-alpha-direct-debug, path: RemoteLink-v0.9.1-alpha-direct-debug.apk, retention-days: 14}
       - name: Check release signing configuration
         id: signing
         run: |
@@ -59,29 +60,29 @@ jobs:
         if: steps.signing.outputs.enabled == 'true'
         run: |
           gradle --no-daemon --stacktrace assembleDirectRelease bundlePlayRelease
-          cp app/build/outputs/apk/direct/release/app-direct-release.apk RemoteLink-v0.9-alpha-release.apk
-          cp app/build/outputs/bundle/playRelease/app-play-release.aab RemoteLink-v0.9-alpha-play.aab
+          cp app/build/outputs/apk/direct/release/app-direct-release.apk RemoteLink-v0.9.1-alpha-release.apk
+          cp app/build/outputs/bundle/playRelease/app-play-release.aab RemoteLink-v0.9.1-alpha-play.aab
       - name: Verify release APK signature
         if: steps.signing.outputs.enabled == 'true'
         run: |
           APKSIGNER="$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner"
           [[ -x "$APKSIGNER" ]] || APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -maxdepth 2 -type f -name apksigner -perm -111 | sort -V | tail -n 1)"
           [[ -n "$APKSIGNER" && -x "$APKSIGNER" ]] || { echo "apksigner não encontrado" >&2; exit 1; }
-          "$APKSIGNER" verify --verbose --print-certs RemoteLink-v0.9-alpha-release.apk
+          "$APKSIGNER" verify --verbose --print-certs RemoteLink-v0.9.1-alpha-release.apk
       - name: Generate update manifest
         if: steps.signing.outputs.enabled == 'true'
         run: |
           python3 - <<'PY'
           import json, os, hashlib
-          name='RemoteLink-v0.9-alpha-release.apk'
+          name='RemoteLink-v0.9.1-alpha-release.apk'
           sha=hashlib.sha256(open(name,'rb').read()).hexdigest()
           data={
             'packageName':'app.remotelink',
-            'versionCode':15,
-            'versionName':'0.9-alpha',
+            'versionCode':16,
+            'versionName':'0.9.1-alpha',
             'apkUrl':os.environ.get('REMOTELINK_DIRECT_APK_URL','').strip(),
             'sha256':sha,
-            'notes':'RemoteLink v0.9-alpha: captura de tela inteira, correção de geometria landscape pelo conteúdo real do MediaProjection, permissões por capacidade em tempo real, QR opcional e interface refinada.'
+            'notes':'RemoteLink v0.9.1-alpha: reparo automático de orientação, captura landscape robusta, viewer fixo sem crop, perfil balanceado 30 FPS e pacing WebRTC mais estável em redes lentas.'
           }
           open('updates.json','w',encoding='utf-8').write(json.dumps(data,ensure_ascii=False,indent=2)+'\n')
           PY
@@ -89,9 +90,9 @@ jobs:
         if: steps.signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: RemoteLink-v0.9-alpha-signed-release
+          name: RemoteLink-v0.9.1-alpha-signed-release
           path: |
-            RemoteLink-v0.9-alpha-release.apk
-            RemoteLink-v0.9-alpha-play.aab
+            RemoteLink-v0.9.1-alpha-release.apk
+            RemoteLink-v0.9.1-alpha-play.aab
             updates.json
           retention-days: 30
