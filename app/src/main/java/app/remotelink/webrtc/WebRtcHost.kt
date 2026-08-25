@@ -7,6 +7,7 @@ import android.hardware.display.DisplayManager
 import android.media.projection.MediaProjection
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.Display
 import app.remotelink.control.RemoteAccessibilityService
 import app.remotelink.transfer.IncomingFileReceiver
@@ -17,6 +18,7 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -53,6 +55,10 @@ class WebRtcHost(
     private val localCandidates = ConcurrentLinkedQueue<SignalCandidate>()
     private val fileReceiver = IncomingFileReceiver(context.applicationContext)
     private val watchdogHandler = Handler(Looper.getMainLooper())
+    private val displayManager = context.getSystemService(DisplayManager::class.java)
+    private val captureGeometryExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "RemoteLink-CaptureGeometry").apply { isDaemon = true }
+    }
 
     @Volatile private var peer: PeerConnection? = null
     @Volatile private var videoSender: RtpSender? = null
@@ -72,6 +78,21 @@ class WebRtcHost(
     @Volatile private var gatheringState = "new"
     @Volatile private var localCandidateCount = 0
     @Volatile private var pendingFileApproval: PendingFileApproval? = null
+    @Volatile private var baseCaptureWidth = 0
+    @Volatile private var baseCaptureHeight = 0
+    @Volatile private var lastDisplayWidth = 0
+    @Volatile private var lastDisplayHeight = 0
+    @Volatile private var displayRevision = 0L
+
+    private val geometryRefreshRunnable = Runnable { refreshCaptureGeometryAsync() }
+
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) = Unit
+        override fun onDisplayRemoved(displayId: Int) = Unit
+        override fun onDisplayChanged(displayId: Int) {
+            if (displayId == Display.DEFAULT_DISPLAY) scheduleGeometryRefresh()
+        }
+    }
 
     private val watchdogRunnable = object : Runnable {
         override fun run() {
@@ -118,6 +139,8 @@ class WebRtcHost(
                 override fun onStop() {
                     captureStarted = false
                     activeSpec = null
+                    baseCaptureWidth = 0
+                    baseCaptureHeight = 0
                     onProjectionStopped()
                 }
             }
@@ -126,6 +149,7 @@ class WebRtcHost(
         textureHelper = SurfaceTextureHelper.create("RemoteLink-Capture", eglBase.eglBaseContext)
         capturer.initialize(textureHelper, context.applicationContext, videoSource.capturerObserver)
         videoTrack = factory.createVideoTrack("remotelink-screen", videoSource).apply { setEnabled(true) }
+        try { displayManager?.registerDisplayListener(displayListener, watchdogHandler) } catch (_: Exception) {}
         watchdogHandler.postDelayed(watchdogRunnable, WATCHDOG_INTERVAL_MS)
     }
 
@@ -182,12 +206,17 @@ class WebRtcHost(
     fun diagnosticState(sessionHash: String): JSONObject {
         if (!isCurrentSession(sessionHash)) return JSONObject().put("peer", "closed").put("ice", "closed")
         val spec = activeSpec
+        val physical = physicalDisplaySize()
         val heartbeatAge = if (lastHeartbeatAt > 0L) System.currentTimeMillis() - lastHeartbeatAt else -1L
         return JSONObject().put("peer", peerState).put("ice", iceState).put("gathering", gatheringState)
             .put("localCandidates", localCandidateCount).put("captureStarted", captureStarted)
             .put("profile", captureProfile).put("width", spec?.width ?: 0).put("height", spec?.height ?: 0)
             .put("fps", spec?.fps ?: 0).put("minBitrateBps", spec?.minBitrateBps ?: 0)
             .put("maxBitrateBps", spec?.maxBitrateBps ?: 0)
+            .put("displayWidth", physical.x).put("displayHeight", physical.y)
+            .put("orientation", orientationLabel(physical))
+            .put("baseCaptureWidth", baseCaptureWidth).put("baseCaptureHeight", baseCaptureHeight)
+            .put("displayRevision", displayRevision)
             .put("fileChannelReady", fileAuthenticated)
             .put("fileApprovalPending", pendingFileApproval != null)
             .put("heartbeatAgeMs", heartbeatAge)
@@ -230,20 +259,24 @@ class WebRtcHost(
             if (disposed) return
             disposed = true
             watchdogHandler.removeCallbacks(watchdogRunnable)
+            watchdogHandler.removeCallbacks(geometryRefreshRunnable)
+            try { displayManager?.unregisterDisplayListener(displayListener) } catch (_: Exception) {}
             closePeerLocked()
             try { if (captureStarted) capturer.stopCapture() } catch (_: Exception) {}
             captureStarted = false; activeSpec = null
+            baseCaptureWidth = 0; baseCaptureHeight = 0
             try { capturer.dispose() } catch (_: Exception) {}
             try { textureHelper.dispose() } catch (_: Exception) {}
             try { videoTrack.dispose() } catch (_: Exception) {}
             try { videoSource.dispose() } catch (_: Exception) {}
             try { factory.dispose() } catch (_: Exception) {}
             try { eglBase.release() } catch (_: Exception) {}
+            captureGeometryExecutor.shutdownNow()
         }
     }
 
     private fun physicalDisplaySize(): Point {
-        val display = context.getSystemService(DisplayManager::class.java)?.getDisplay(Display.DEFAULT_DISPLAY)
+        val display = displayManager?.getDisplay(Display.DEFAULT_DISPLAY)
         if (display != null) {
             @Suppress("DEPRECATION")
             val metrics = android.util.DisplayMetrics().also { display.getRealMetrics(it) }
@@ -253,8 +286,7 @@ class WebRtcHost(
         return Point(dm.widthPixels.coerceAtLeast(2), dm.heightPixels.coerceAtLeast(2))
     }
 
-    private fun scaledSize(maxEdge: Int): Pair<Int, Int> {
-        val physical = physicalDisplaySize()
+    private fun scaledSizeFor(physical: Point, maxEdge: Int): Pair<Int, Int> {
         var width = physical.x.coerceAtLeast(2)
         var height = physical.y.coerceAtLeast(2)
         val longest = maxOf(width, height)
@@ -268,19 +300,63 @@ class WebRtcHost(
         return width to height
     }
 
+    private fun baseMaxEdgeFor(physical: Point): Int =
+        if (physical.x > physical.y) LANDSCAPE_BASE_CAPTURE_MAX_EDGE else PORTRAIT_BASE_CAPTURE_MAX_EDGE
+
+    private fun orientationLabel(physical: Point): String =
+        if (physical.x > physical.y) "landscape" else "portrait"
+
     private fun ensureCaptureStartedLocked() {
         if (captureStarted) {
+            scheduleGeometryRefresh(0L)
             applyOutputProfile()
             return
         }
-        // Keep one stable capture surface, but avoid capturing 1440p/60 for every
-        // profile. 1280/60 is enough for low-latency fluid mode and dramatically
-        // reduces scaling/encoder pressure on many phones. Touch coordinates remain
-        // based on the physical display, not these stream dimensions.
-        val (baseWidth, baseHeight) = scaledSize(BASE_CAPTURE_MAX_EDGE)
+        val physical = physicalDisplaySize()
+        val (baseWidth, baseHeight) = scaledSizeFor(physical, baseMaxEdgeFor(physical))
         capturer.startCapture(baseWidth, baseHeight, BASE_CAPTURE_FPS)
+        baseCaptureWidth = baseWidth
+        baseCaptureHeight = baseHeight
+        lastDisplayWidth = physical.x
+        lastDisplayHeight = physical.y
+        displayRevision += 1L
         captureStarted = true
-        applyOutputProfile()
+        applyOutputProfile(physical)
+    }
+
+    private fun scheduleGeometryRefresh(delayMs: Long = DISPLAY_CHANGE_DEBOUNCE_MS) {
+        if (disposed) return
+        watchdogHandler.removeCallbacks(geometryRefreshRunnable)
+        watchdogHandler.postDelayed(geometryRefreshRunnable, delayMs)
+    }
+
+    private fun refreshCaptureGeometryAsync() {
+        if (disposed || !captureStarted) return
+        val physical = physicalDisplaySize()
+        if (physical.x == lastDisplayWidth && physical.y == lastDisplayHeight) return
+        val (wantedBaseWidth, wantedBaseHeight) = scaledSizeFor(physical, baseMaxEdgeFor(physical))
+        captureGeometryExecutor.execute {
+            if (disposed || !captureStarted) return@execute
+            try {
+                // ScreenCapturerAndroid documents changeCaptureFormat() specifically for
+                // display rotation. Updating the VirtualDisplay at the source avoids the
+                // stretched/letterboxed landscape frame that also caused pointer mismatch.
+                if (wantedBaseWidth != baseCaptureWidth || wantedBaseHeight != baseCaptureHeight) {
+                    capturer.changeCaptureFormat(wantedBaseWidth, wantedBaseHeight, BASE_CAPTURE_FPS)
+                }
+                if (disposed || !captureStarted) return@execute
+                baseCaptureWidth = wantedBaseWidth
+                baseCaptureHeight = wantedBaseHeight
+                lastDisplayWidth = physical.x
+                lastDisplayHeight = physical.y
+                displayRevision += 1L
+                applyOutputProfile(physical)
+                applySenderPolicy()
+                sendDisplayGeometry()
+            } catch (e: Exception) {
+                Log.w(TAG, "Falha ao adaptar captura à rotação ${physical.x}x${physical.y}", e)
+            }
+        }
     }
 
     private fun setCaptureProfileInternal(profile: String): Boolean {
@@ -292,25 +368,28 @@ class WebRtcHost(
         return true
     }
 
-    private fun desiredCaptureSpec(): CaptureSpec {
+    private fun desiredCaptureSpec(physical: Point = physicalDisplaySize()): CaptureSpec {
+        val landscape = physical.x > physical.y
         val settings = when (captureProfile) {
-            "economy" -> Triple(720, 20, 400_000 to 1_100_000)
-            "balanced" -> Triple(1080, 30, 800_000 to 2_600_000)
-            "high" -> Triple(1280, 30, 1_200_000 to 3_800_000)
-            "fluid" -> Triple(1080, 60, 1_200_000 to 3_600_000)
-            else -> Triple(1080, 30, 700_000 to 2_800_000)
+            "economy" -> Triple(if (landscape) 960 else 720, 20, 500_000 to 1_400_000)
+            "balanced" -> Triple(if (landscape) 1440 else 1280, 30, 1_100_000 to 3_800_000)
+            "high" -> Triple(if (landscape) 1600 else 1440, 30, 1_800_000 to 5_800_000)
+            "fluid" -> Triple(if (landscape) 1280 else 1080, 60, 1_400_000 to 5_000_000)
+            else -> Triple(if (landscape) 1440 else 1280, 30, 1_000_000 to 4_200_000)
         }
-        val (width, height) = scaledSize(settings.first)
+        val (width, height) = scaledSizeFor(physical, settings.first)
         return CaptureSpec(width, height, settings.second, settings.third.first, settings.third.second)
     }
 
-    private fun applyOutputProfile() {
+    private fun applyOutputProfile(physical: Point = physicalDisplaySize()) {
         if (!captureStarted || disposed) return
-        val wanted = desiredCaptureSpec()
+        val wanted = desiredCaptureSpec(physical)
         try {
             videoSource.adaptOutputFormat(wanted.width, wanted.height, wanted.fps)
             activeSpec = wanted
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao adaptar formato de saída", e)
+        }
     }
 
     private fun applySenderPolicy() {
@@ -323,10 +402,32 @@ class WebRtcHost(
                 encoding.minBitrateBps = spec.minBitrateBps
                 encoding.maxBitrateBps = spec.maxBitrateBps
                 encoding.maxFramerate = spec.fps
-                encoding.bitratePriority = if (captureProfile == "fluid") 2.4 else 2.0
+                encoding.scaleResolutionDownBy = 1.0
+                encoding.bitratePriority = if (captureProfile == "fluid") 4.0 else 3.0
+                encoding.networkPriority = Priority.HIGH
             }
             sender.parameters = params
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao aplicar política do sender", e)
+        }
+    }
+
+    private fun sendDisplayGeometry(channel: DataChannel? = controlChannel) {
+        val target = channel ?: return
+        if (!controlAuthenticated || target.state() != DataChannel.State.OPEN) return
+        val physical = physicalDisplaySize()
+        val spec = activeSpec
+        sendJson(
+            target,
+            JSONObject()
+                .put("type", "display_geometry")
+                .put("displayWidth", physical.x)
+                .put("displayHeight", physical.y)
+                .put("orientation", orientationLabel(physical))
+                .put("streamWidth", spec?.width ?: 0)
+                .put("streamHeight", spec?.height ?: 0)
+                .put("revision", displayRevision)
+        )
     }
 
     private fun observer() = object : PeerConnection.Observer {
@@ -361,7 +462,10 @@ class WebRtcHost(
         override fun onAddTrack(receiver: RtpReceiver?, mediaStreams: Array<out MediaStream>?) = Unit
         override fun onConnectionChange(newState: PeerConnection.PeerConnectionState?) {
             peerState = newState?.name?.lowercase() ?: "unknown"
-            if (newState == PeerConnection.PeerConnectionState.CONNECTED) applySenderPolicy()
+            if (newState == PeerConnection.PeerConnectionState.CONNECTED) {
+                applySenderPolicy()
+                sendDisplayGeometry()
+            }
             if (newState == PeerConnection.PeerConnectionState.FAILED || newState == PeerConnection.PeerConnectionState.CLOSED) {
                 controlAuthenticated = false
                 fileAuthenticated = false
@@ -396,8 +500,6 @@ class WebRtcHost(
         override fun onMessage(buffer: DataChannel.Buffer?) {
             buffer ?: return
             if (buffer.binary) {
-                // Binary payload is accepted only after Android approval created an
-                // active receiver. Unsolicited chunks are dropped fail-closed.
                 if (!fileAuthenticated || pendingFileApproval != null || fileReceiver.progress() == null || buffer.data.remaining() > IncomingFileReceiver.MAX_CHUNK_BYTES) return
                 val bytes = ByteArray(buffer.data.remaining()); buffer.data.get(bytes)
                 val error = fileReceiver.append(bytes)
@@ -427,7 +529,7 @@ class WebRtcHost(
                 controlAuthenticated = ok; lastCommandSeq = 0L
                 if (ok) touchHeartbeat()
                 sendJson(channel, JSONObject().put("type", if (ok) "auth_ok" else "auth_failed").put("controlReady", RemoteAccessibilityService.instance != null))
-                if (!ok) channel.close()
+                if (ok) sendDisplayGeometry(channel) else channel.close()
             }
             "ping" -> if (controlAuthenticated) {
                 touchHeartbeat()
@@ -555,9 +657,12 @@ class WebRtcHost(
     private fun constantTimeEquals(a:String,b:String):Boolean=MessageDigest.isEqual(a.toByteArray(StandardCharsets.UTF_8),b.toByteArray(StandardCharsets.UTF_8))
 
     companion object {
+        private const val TAG = "RemoteLinkWebRtc"
         private const val MAX_CONTROL_MESSAGE_BYTES = 16 * 1024
-        private const val BASE_CAPTURE_MAX_EDGE = 1280
+        private const val PORTRAIT_BASE_CAPTURE_MAX_EDGE = 1440
+        private const val LANDSCAPE_BASE_CAPTURE_MAX_EDGE = 1600
         private const val BASE_CAPTURE_FPS = 60
+        private const val DISPLAY_CHANGE_DEBOUNCE_MS = 180L
         private const val WATCHDOG_INTERVAL_MS = 5_000L
         private const val WATCHDOG_TIMEOUT_MS = 30_000L
         private const val FILE_APPROVAL_TIMEOUT_MS = 30_000L
