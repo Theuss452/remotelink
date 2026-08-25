@@ -106,6 +106,7 @@ class ScreenCaptureService : Service() {
 
     fun isReady(): Boolean = webRtcHost != null
     fun isCaptureStarted(): Boolean = webRtcHost?.isCaptureStarted() == true
+    fun hasActiveSession(): Boolean = webRtcHost?.hasActiveSession() == true
 
     fun createAnswer(sessionHash: String, offerSdp: String): String =
         webRtcHost?.createAnswer(sessionHash, offerSdp) ?: error("capture_not_ready")
@@ -134,15 +135,18 @@ class ScreenCaptureService : Service() {
         webRtcHost?.endSession(sessionHash)
     }
 
-    /** Revoking screen access is intentionally destructive and fail-closed. */
+    /**
+     * Capability changes are live and reversible. In particular, disabling "Ver tela"
+     * now disables the WebRTC video track instead of destroying MediaProjection, so the
+     * user can turn it back on without going through Android's capture consent again.
+     */
     fun applyCapabilities() {
-        if (!SessionCapabilities.canViewScreen()) stopProjection()
+        webRtcHost?.applyCapabilities()
     }
 
     fun cancelPendingFileTransfer() {
         getSystemService(NotificationManager::class.java).cancel(FILE_NOTIFICATION_ID)
-        // The receiver independently checks SessionCapabilities on every chunk and finish,
-        // so a revoked file capability cannot continue writing even if a stale peer sends data.
+        webRtcHost?.cancelPendingFileTransfer()
     }
 
     fun stopAll() {
@@ -207,7 +211,7 @@ class ScreenCaptureService : Service() {
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.presence_video_online)
             .setContentTitle("RemoteLink • transmissão autorizada")
-            .setContentText("Sessão local protegida. Você pode revogar a transmissão imediatamente.")
+            .setContentText("Sessão local protegida. Você pode desconectar imediatamente.")
             .setOngoing(true)
             .addAction(Notification.Action.Builder(null, "Desconectar", pi).build())
             .build()
