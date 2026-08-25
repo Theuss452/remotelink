@@ -25,15 +25,15 @@
     const quality = document.createElement('section');
     quality.className = 'panel text-panel remotelink-tools';
     quality.innerHTML = `
-      <div class="section-head"><div><span class="eyebrow">DESEMPENHO</span><h3>Qualidade da transmissão</h3></div><span class="mini-pill">v0.6</span></div>
-      <p>Fluido tenta 60 FPS com resolução moderada para reduzir a sensação de atraso. Alta prioriza definição.</p>
+      <div class="section-head"><div><span class="eyebrow">DESEMPENHO</span><h3>Qualidade da transmissão</h3></div><span class="mini-pill">low-latency</span></div>
+      <p>Fluido prioriza resposta e FPS. Alta mantém mais definição sem capturar 1440p/60 o tempo inteiro no Android.</p>
       <div class="tool-row">
         <select id="captureProfile" disabled aria-label="Perfil de qualidade">
-          <option value="auto">Automático • 30 FPS</option>
-          <option value="fluid">Fluido • até 60 FPS</option>
-          <option value="balanced">Balanceado • 30 FPS</option>
-          <option value="high">Alta qualidade • 30 FPS</option>
-          <option value="economy">Economia • 20 FPS</option>
+          <option value="auto">Automático • 1080 / 30 FPS</option>
+          <option value="fluid">Fluido • 1080 / até 60 FPS</option>
+          <option value="balanced">Balanceado • 1080 / 30 FPS</option>
+          <option value="high">Alta qualidade • 1280 / 30 FPS</option>
+          <option value="economy">Economia • 720 / 20 FPS</option>
         </select>
         <span id="profileState" class="tool-state">Automático</span>
       </div>`;
@@ -41,10 +41,10 @@
     const files = document.createElement('section');
     files.className = 'panel text-panel remotelink-tools';
     files.innerHTML = `
-      <div class="section-head"><div><span class="eyebrow">ARQUIVOS</span><h3>Enviar para o Android</h3></div><span id="fileSecureBadge" class="mini-pill">DTLS</span></div>
-      <p>O arquivo viaja pelo WebRTC da sessão aprovada e é salvo em <strong>Downloads/RemoteLink</strong>. Limite atual: 100 MB.</p>
+      <div class="section-head"><div><span class="eyebrow">ARQUIVOS</span><h3>Enviar para o Android</h3></div><span id="fileSecureBadge" class="mini-pill">DTLS + aprovação</span></div>
+      <p>O arquivo só começa a ser enviado depois que alguém tocar em <strong>Permitir</strong> na notificação do Android. Limite atual: 100 MB.</p>
       <input id="remoteFileInput" class="file-input" type="file" disabled>
-      <button id="sendFileButton" class="secondary wide-button" type="button" disabled>Enviar arquivo</button>
+      <button id="sendFileButton" class="secondary wide-button" type="button" disabled>Solicitar envio</button>
       <div class="transfer-progress"><span id="fileProgressBar"></span></div>
       <small id="fileTransferState" class="transfer-state">Aguardando conexão segura…</small>`;
 
@@ -75,21 +75,15 @@
 
     fileInput?.addEventListener('change', () => {
       const file = fileInput.files?.[0];
-      if (!file) {
-        transferState.textContent = 'Selecione um arquivo.';
-        return;
-      }
-      transferState.textContent = `${file.name} • ${formatBytes(file.size)}`;
+      if (!file) return void (transferState.textContent = 'Selecione um arquivo.');
+      transferState.textContent = `${file.name} • ${formatBytes(file.size)} • aguardando solicitação`;
     });
 
     sendFile?.addEventListener('click', async () => {
       const file = fileInput?.files?.[0];
       if (!file) return setTransferState('Selecione um arquivo primeiro.', true);
-      try {
-        await sendFileToAndroid(file);
-      } catch (error) {
-        setTransferState(error?.message || 'Falha ao enviar arquivo.', true);
-      }
+      try { await sendFileToAndroid(file); }
+      catch (error) { setTransferState(error?.message || 'Falha ao enviar arquivo.', true); }
     });
 
     return { quality, files, profile, profileState, fileInput, sendFile, progress, transferState };
@@ -108,9 +102,7 @@
           fileChannel = this.createDataChannel('file', { ordered: true });
           bindFileChannel(fileChannel);
         }
-      } catch (error) {
-        console.warn('RemoteLink: canal de arquivos indisponível', error);
-      }
+      } catch (error) { console.warn('RemoteLink: canal de arquivos indisponível', error); }
       return nativeCreateOffer.apply(this, args);
     };
   }
@@ -124,9 +116,7 @@
       setFileUiEnabled(false);
       if (activeTransfer) rejectTransfer(new Error('Canal de arquivos foi fechado.'));
     };
-    channel.onerror = () => {
-      if (activeTransfer) rejectTransfer(new Error('Erro no canal de arquivos.'));
-    };
+    channel.onerror = () => { if (activeTransfer) rejectTransfer(new Error('Erro no canal de arquivos.')); };
     channel.onmessage = event => {
       if (typeof event.data !== 'string') return;
       let data;
@@ -143,7 +133,10 @@
         fileAuthenticated = false;
         setFileUiEnabled(false);
         setTransferState('Autenticação do canal de arquivos falhou.', true);
+      } else if (data.type === 'file_pending' && activeTransfer?.id === data.id) {
+        setTransferState(`Aguardando você permitir '${activeTransfer.file.name}' na notificação do Android…`);
       } else if (data.type === 'file_ready' && activeTransfer?.id === data.id) {
+        setTransferState(`Aprovado no Android • iniciando ${activeTransfer.file.name}…`, false, true);
         readyResolve?.(); clearReadyPromise();
       } else if (data.type === 'file_saved' && activeTransfer?.id === data.id) {
         savedResolve?.(data); clearSavedPromise();
@@ -161,9 +154,7 @@
   }
 
   async function sendFileToAndroid(file) {
-    if (!fileAuthenticated || !fileChannel || fileChannel.readyState !== 'open') {
-      throw new Error('Canal seguro de arquivos ainda não está pronto.');
-    }
+    if (!fileAuthenticated || !fileChannel || fileChannel.readyState !== 'open') throw new Error('Canal seguro de arquivos ainda não está pronto.');
     if (activeTransfer) throw new Error('Já existe uma transferência em andamento.');
     if (file.size <= 0) throw new Error('O arquivo está vazio.');
     if (file.size > maxFileBytes) throw new Error(`Arquivo maior que o limite de ${formatBytes(maxFileBytes)}.`);
@@ -172,15 +163,12 @@
     activeTransfer = { id, file };
     setFileUiEnabled(false, true);
     setProgress(0);
-    setTransferState(`Preparando ${file.name}…`);
+    setTransferState(`Solicitando autorização para receber ${file.name} no Android…`);
 
     try {
       const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
-      fileChannel.send(JSON.stringify({
-        type: 'file_begin', id, name: file.name, size: file.size,
-        mime: file.type || 'application/octet-stream'
-      }));
-      await withTimeout(ready, 8000, 'O Android não confirmou o início da transferência.');
+      fileChannel.send(JSON.stringify({ type: 'file_begin', id, name: file.name, size: file.size, mime: file.type || 'application/octet-stream' }));
+      await withTimeout(ready, 35000, 'A autorização no Android expirou. Tente novamente.');
 
       let offset = 0;
       while (offset < file.size) {
@@ -255,10 +243,7 @@
   function clearSavedPromise() { savedResolve = null; savedReject = null; }
 
   function withTimeout(promise, ms, message) {
-    return Promise.race([
-      promise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms))
-    ]);
+    return Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms))]);
   }
 
   function makeTransferId() {
@@ -276,6 +261,10 @@
       invalid_chunk: 'Bloco de dados inválido.',
       size_overflow: 'Foram recebidos mais dados que o tamanho declarado.',
       size_mismatch: 'A transferência terminou com tamanho diferente do esperado.',
+      approval_pending: 'Já existe uma solicitação aguardando aprovação no Android.',
+      approval_denied: 'A transferência foi recusada no Android.',
+      approval_timeout: 'A aprovação no Android expirou.',
+      session_closed: 'A sessão foi encerrada antes da autorização.',
       save_failed: 'O Android não conseguiu salvar o arquivo.'
     })[error] || `Falha na transferência (${error || 'erro desconhecido'}).`;
   }
