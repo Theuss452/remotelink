@@ -28,8 +28,6 @@ function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 function prettyState(s){return ({new:'iniciando',connecting:'conectando',connected:'conectado',disconnected:'instável',failed:'falhou',closed:'encerrado'})[s]||s;}
 
 function enforceAutoFit(){
-  // A remote desktop must never crop the source image. `cover` intentionally zooms
-  // and cuts the frame, which made landscape unusable and also broke touch mapping.
   el.video.style.objectFit='contain';
   el.video.style.objectPosition='center center';
   el.video.style.transform='none';
@@ -49,12 +47,12 @@ function updateViewerGeometry(force=false){
   el.stage.classList.toggle('remote-portrait',orientation==='portrait');
   document.documentElement.classList.toggle('remote-landscape',landscape);
   document.documentElement.classList.toggle('remote-portrait',orientation==='portrait');
-  el.stage.style.setProperty('--remote-aspect',vw&&vh?`${vw} / ${vh}`:(landscape?'16 / 9':'9 / 16'));
   if(pointerStart){pointerStart=null;sendControl({type:'drag_cancel'});}
 }
 function applyRemoteGeometry(data){
   const revision=Number(data?.revision)||remoteGeometry.revision;
-  const width=Number(data?.displayWidth)||0,height=Number(data?.displayHeight)||0;
+  const width=Number(data?.captureContentWidth||data?.displayWidth)||0;
+  const height=Number(data?.captureContentHeight||data?.displayHeight)||0;
   const orientation=data?.orientation||(width&&height?(width>height?'landscape':'portrait'):'unknown');
   const changed=orientation!==remoteGeometry.orientation||width!==remoteGeometry.displayWidth||height!==remoteGeometry.displayHeight||revision!==remoteGeometry.revision;
   remoteGeometry={displayWidth:width,displayHeight:height,orientation,revision};
@@ -70,7 +68,12 @@ el.form.addEventListener('submit',async ev=>{ev.preventDefault();if(token){el.pa
 async function pollPair(id){for(let i=0;i<90;i++){await sleep(800);const r=await fetch(`/api/pair/status?id=${encodeURIComponent(id)}`,{cache:'no-store'});const d=await safeJson(r);if(d.status==='approved')return d.token;if(d.status==='denied'||r.status===403)throw new Error('Solicitação recusada no celular.');if(!r.ok&&r.status!==202)throw new Error('O pareamento expirou.');}throw new Error('A solicitação expirou.');}
 
 function preferHardwareFriendlyVideoCodec(transceiver){try{if(!transceiver?.setCodecPreferences||!window.RTCRtpReceiver?.getCapabilities)return;const codecs=RTCRtpReceiver.getCapabilities('video')?.codecs||[];const h264=codecs.filter(c=>String(c.mimeType).toLowerCase()==='video/h264');if(h264.length)transceiver.setCodecPreferences([...h264,...codecs.filter(c=>String(c.mimeType).toLowerCase()!=='video/h264')]);}catch{}}
-function tuneReceiverForLowLatency(receiver){if(!receiver)return;try{if('jitterBufferTarget'in receiver)receiver.jitterBufferTarget=0;}catch{}try{if('playoutDelayHint'in receiver)receiver.playoutDelayHint=0;}catch{}}
+function tuneReceiverForLowLatency(receiver){
+  // Do not force jitterBufferTarget/playoutDelayHint to zero. A zero-sized buffer
+  // turned tiny frame-pacing variations into visible micro-freezes on fast motion.
+  // Chromium's adaptive jitter buffer keeps latency low on a LAN while smoothing bursts.
+  return receiver;
+}
 
 async function startWebRtc(){
   if(!token)throw new Error('Sessão de pareamento ausente.');if(!('RTCPeerConnection'in window))throw new Error('Este navegador não oferece WebRTC.');
@@ -88,10 +91,10 @@ async function startWebRtc(){
 }
 async function postBrowserCandidate(c){if(!token||!c?.candidate)return;await fetch('/api/webrtc/candidate',{method:'POST',headers:jsonHeaders(),body:JSON.stringify({candidate:c.candidate,sdpMid:c.sdpMid??null,sdpMLineIndex:c.sdpMLineIndex})});}
 function startRemoteCandidatePolling(){clearInterval(remoteCandidateTimer);remoteCandidateTimer=setInterval(async()=>{if(!pc||!token)return;try{const r=await fetch('/api/webrtc/candidates',{headers:authHeaders(),cache:'no-store'});if(!r.ok)return;const d=await r.json();for(const c of d.candidates||[]){try{await pc.addIceCandidate({candidate:c.candidate,sdpMid:c.sdpMid,sdpMLineIndex:c.sdpMLineIndex});}catch{}}}catch{}},300);}
-function startStatePolling(){clearInterval(stateTimer);stateTimer=setInterval(async()=>{if(!token)return;try{const r=await fetch('/api/webrtc/state',{headers:authHeaders(),cache:'no-store'});if(!r.ok)return;const d=await r.json();updateReadiness(d.captureReady,d.accessibilityReady);applyRemoteGeometry(d);if(channelAuthenticated&&control?.readyState==='open')setControlEnabled(!!d.accessibilityReady);}catch{}},700);}
+function startStatePolling(){clearInterval(stateTimer);stateTimer=setInterval(async()=>{if(!token)return;try{const r=await fetch('/api/webrtc/state',{headers:authHeaders(),cache:'no-store'});if(!r.ok)return;const d=await r.json();updateReadiness(d.captureReady,d.accessibilityReady);applyRemoteGeometry(d);if(channelAuthenticated&&control?.readyState==='open')setControlEnabled(!!d.accessibilityReady&&d.capTouch!==false);}catch{}},700);}
 
-function bindControlChannel(ch){ch.onopen=()=>ch.send(JSON.stringify({type:'auth',token}));ch.onclose=()=>{channelAuthenticated=false;setControlEnabled(false);exitControlMode(false);};ch.onerror=ch.onclose;ch.onmessage=ev=>{let d;try{d=JSON.parse(ev.data);}catch{return;}if(d.type==='hello'&&ch.readyState==='open')ch.send(JSON.stringify({type:'auth',token}));if(d.type==='auth_ok'){channelAuthenticated=true;setControlEnabled(!!d.controlReady);setConnectOverlay(false);el.hint.classList.remove('hidden');setTimeout(()=>el.hint.classList.add('hidden'),3500);}if(d.type==='display_geometry')applyRemoteGeometry(d);if(d.type==='auth_failed'){channelAuthenticated=false;setMessage('A autenticação do canal de controle falhou.','error');setControlEnabled(false);}if(d.type==='pong'){const started=pings.get(d.id);if(started){el.latency.textContent=`${Math.max(1,Math.round(performance.now()-started))} ms`;pings.delete(d.id);}}if(d.type==='control_error'&&d.error==='accessibility_disabled'){updateReadiness(true,false);setControlEnabled(false);}};}
-function updateConnectionState(state){el.rtcState.textContent=prettyState(state);el.rtcState.classList.toggle('live',state==='connected');if(state==='connected'){setConnectOverlay(false);el.disconnectTop.classList.remove('hidden');el.fullscreen.disabled=false;el.fit.disabled=false;el.stage.classList.add('connected');enforceAutoFit();el.pairButton.textContent='Conectado';el.pairButton.disabled=true;setMessage('Transmissão conectada. Ajuste automático sem recorte ativo.','success');}else if(state==='failed'||state==='closed'){setConnectOverlay(false);setControlEnabled(false);el.stage.classList.remove('connected');exitControlMode(false);}}
+function bindControlChannel(ch){ch.onopen=()=>ch.send(JSON.stringify({type:'auth',token}));ch.onclose=()=>{channelAuthenticated=false;setControlEnabled(false);exitControlMode(false);};ch.onerror=ch.onclose;ch.onmessage=ev=>{let d;try{d=JSON.parse(ev.data);}catch{return;}if(d.type==='hello'&&ch.readyState==='open')ch.send(JSON.stringify({type:'auth',token}));if(d.type==='auth_ok'){channelAuthenticated=true;setControlEnabled(!!d.controlReady);setConnectOverlay(false);el.hint.classList.remove('hidden');setTimeout(()=>el.hint.classList.add('hidden'),3500);}if(d.type==='display_geometry')applyRemoteGeometry(d);if(d.type==='capabilities'&&d.capabilities){setControlEnabled(d.capabilities.touch!==false&&controlReady!==false);}if(d.type==='auth_failed'){channelAuthenticated=false;setMessage('A autenticação do canal de controle falhou.','error');setControlEnabled(false);}if(d.type==='pong'){const started=pings.get(d.id);if(started){el.latency.textContent=`${Math.max(1,Math.round(performance.now()-started))} ms`;pings.delete(d.id);}}if(d.type==='control_error'&&d.error==='accessibility_disabled'){updateReadiness(true,false);setControlEnabled(false);}};}
+function updateConnectionState(state){el.rtcState.textContent=prettyState(state);el.rtcState.classList.toggle('live',state==='connected');if(state==='connected'){setConnectOverlay(false);el.disconnectTop.classList.remove('hidden');el.fullscreen.disabled=false;el.fit.disabled=false;el.stage.classList.add('connected');enforceAutoFit();el.pairButton.textContent='Conectado';el.pairButton.disabled=true;setMessage('Transmissão conectada. Imagem inteira e buffer adaptativo ativos.','success');}else if(state==='failed'||state==='closed'){setConnectOverlay(false);setControlEnabled(false);el.stage.classList.remove('connected');exitControlMode(false);}}
 function setControlEnabled(enabled){controlReady=enabled;[el.back,el.home,el.recents,el.text,el.sendText].forEach(x=>x.disabled=!enabled);}
 function sendControl(payload){if(!controlReady||!control||control.readyState!=='open')return false;control.send(JSON.stringify({...payload,seq:++commandSeq}));return true;}
 el.back.addEventListener('click',()=>sendControl({type:'back'}));el.home.addEventListener('click',()=>sendControl({type:'home'}));el.recents.addEventListener('click',()=>sendControl({type:'recents'}));el.sendText.addEventListener('click',sendText);el.text.addEventListener('keydown',ev=>{if(ev.key==='Enter'){ev.preventDefault();sendText();}});function sendText(){if(!el.text.value)return;if(sendControl({type:'text',text:el.text.value}))setMessage('Texto enviado ao campo selecionado.','success');}
@@ -102,14 +105,12 @@ window.addEventListener('popstate',()=>{if(suppressHistoryPop){suppressHistoryPo
 
 function normalizedPoint(clientX,clientY){
   const rect=el.video.getBoundingClientRect(),vw=el.video.videoWidth,vh=el.video.videoHeight;if(!vw||!vh||!rect.width||!rect.height)return null;
-  // Rendering is always `contain`; calculate against exactly the same letterboxed
-  // rectangle so clicks never target cropped/off-screen pixels.
   const scale=Math.min(rect.width/vw,rect.height/vh);
   const displayW=vw*scale,displayH=vh*scale,offX=(rect.width-displayW)/2,offY=(rect.height-displayH)/2;
   const x=(clientX-rect.left-offX)/displayW,y=(clientY-rect.top-offY)/displayH;if(x<0||x>1||y<0||y>1)return null;return{x,y};
 }
 el.stage.addEventListener('pointerdown',ev=>{if(!controlReady||!el.stage.classList.contains('streaming'))return;enterControlMode();const p=normalizedPoint(ev.clientX,ev.clientY);if(!p)return;pointerStart={id:ev.pointerId,x:p.x,y:p.y,lastX:p.x,lastY:p.y,lastSent:performance.now()};sendControl({type:'drag_start',x:p.x,y:p.y});try{el.stage.setPointerCapture(ev.pointerId);}catch{}ev.preventDefault();ev.stopPropagation();},{capture:true});
-el.stage.addEventListener('pointermove',ev=>{const drag=pointerStart;if(!controlMode||!drag||drag.id!==ev.pointerId||!controlReady)return;const now=performance.now();if(now-drag.lastSent<16)return;const p=normalizedPoint(ev.clientX,ev.clientY);if(!p)return;if(Math.hypot(p.x-drag.lastX,p.y-drag.lastY)<0.0015)return;drag.lastX=p.x;drag.lastY=p.y;drag.lastSent=now;sendControl({type:'drag_move',x:p.x,y:p.y});ev.preventDefault();ev.stopPropagation();},{capture:true});
+el.stage.addEventListener('pointermove',ev=>{const drag=pointerStart;if(!controlMode||!drag||drag.id!==ev.pointerId||!controlReady)return;const now=performance.now();if(now-drag.lastSent<20)return;const p=normalizedPoint(ev.clientX,ev.clientY);if(!p)return;if(Math.hypot(p.x-drag.lastX,p.y-drag.lastY)<0.0015)return;drag.lastX=p.x;drag.lastY=p.y;drag.lastSent=now;sendControl({type:'drag_move',x:p.x,y:p.y});ev.preventDefault();ev.stopPropagation();},{capture:true});
 el.stage.addEventListener('pointerup',ev=>{const drag=pointerStart;if(!drag||drag.id!==ev.pointerId)return;const end=normalizedPoint(ev.clientX,ev.clientY)||{x:drag.lastX,y:drag.lastY};pointerStart=null;sendControl({type:'drag_end',x:end.x,y:end.y});ev.preventDefault();ev.stopPropagation();},{capture:true});el.stage.addEventListener('pointercancel',ev=>{if(pointerStart){pointerStart=null;sendControl({type:'drag_cancel'});}ev.preventDefault();ev.stopPropagation();},{capture:true});el.stage.addEventListener('contextmenu',ev=>{if(controlMode){ev.preventDefault();ev.stopPropagation();}});
 
 function flushWheelGesture(){wheelTimer=null;if(!controlMode||!controlReady||!el.stage.classList.contains('streaming')){wheelAccumX=wheelAccumY=0;return;}const dx=wheelAccumX,dy=wheelAccumY;wheelAccumX=wheelAccumY=0;if(Math.abs(dx)<1&&Math.abs(dy)<1)return;const horizontal=Math.abs(dx)>Math.abs(dy)*1.15;const raw=horizontal?dx:dy;const strength=Math.min(.18,Math.max(.045,Math.abs(raw)/900));const anchorX=Math.min(.82,Math.max(.18,wheelAnchor.x));const anchorY=Math.min(.82,Math.max(.18,wheelAnchor.y));if(horizontal){const sign=Math.sign(raw);sendControl({type:'swipe',x1:anchorX,y1:anchorY,x2:Math.min(.94,Math.max(.06,anchorX-sign*strength)),y2:anchorY,duration:135});}else{const sign=Math.sign(raw);sendControl({type:'swipe',x1:anchorX,y1:anchorY,x2:anchorX,y2:Math.min(.94,Math.max(.06,anchorY-sign*strength)),duration:135});}}
