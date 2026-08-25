@@ -5,12 +5,11 @@ import android.content.Intent
 import android.graphics.Point
 import android.hardware.display.DisplayManager
 import android.media.projection.MediaProjection
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.Display
-import android.view.WindowManager
+import android.view.Surface
 import app.remotelink.control.RemoteAccessibilityService
 import app.remotelink.security.SessionCapabilities
 import app.remotelink.transfer.IncomingFileReceiver
@@ -24,7 +23,6 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.abs
 
 class WebRtcHost(
     private val context: Context,
@@ -86,10 +84,6 @@ class WebRtcHost(
     @Volatile private var baseCaptureHeight = 0
     @Volatile private var lastDisplayWidth = 0
     @Volatile private var lastDisplayHeight = 0
-    @Volatile private var lastSourceWidth = 0
-    @Volatile private var lastSourceHeight = 0
-    @Volatile private var capturedContentWidth = 0
-    @Volatile private var capturedContentHeight = 0
     @Volatile private var displayRevision = 0L
     @Volatile private var forceGeometryRefresh = false
 
@@ -101,21 +95,8 @@ class WebRtcHost(
 
         override fun onDisplayChanged(displayId: Int) {
             if (displayId != Display.DEFAULT_DISPLAY) return
-            val display = physicalDisplaySize()
-            val previousKnown = lastDisplayWidth > 1 && lastDisplayHeight > 1
-            val orientationChanged = previousKnown &&
-                ((lastDisplayWidth > lastDisplayHeight) != (display.x > display.y))
-
-            if (orientationChanged) {
-                // onCapturedContentResize can arrive after DisplayManager. Do not let an old
-                // portrait callback win over a display that is already landscape (or vice versa).
-                capturedContentWidth = 0
-                capturedContentHeight = 0
-                forceGeometryRefresh = true
-            }
+            forceGeometryRefresh = true
             scheduleGeometryRefresh(0L)
-            // OEMs do not all update projection geometry in the same order. Verify again after
-            // the rotation animation settles without stopping MediaProjection.
             watchdogHandler.postDelayed({
                 if (!disposed && captureStarted) {
                     forceGeometryRefresh = true
@@ -168,20 +149,8 @@ class WebRtcHost(
             object : MediaProjection.Callback() {
                 override fun onCapturedContentResize(width: Int, height: Int) {
                     if (width <= 1 || height <= 1) return
-                    val display = physicalDisplaySize()
-                    val callbackLandscape = width > height
-                    val displayLandscape = display.x > display.y
-                    if (callbackLandscape != displayLandscape) {
-                        Log.w(
-                            TAG,
-                            "Ignorando geometria obsoleta do MediaProjection: ${width}x$height; display=${display.x}x${display.y}"
-                        )
-                        forceGeometryRefresh = true
-                        scheduleGeometryRefresh(DISPLAY_CHANGE_DEBOUNCE_MS)
-                        return
-                    }
-                    capturedContentWidth = width
-                    capturedContentHeight = height
+                    // Full-display capture uses the actual rotated display as geometry authority.
+                    // OEM callbacks can arrive late or briefly report the previous orientation.
                     forceGeometryRefresh = true
                     scheduleGeometryRefresh(0L)
                 }
@@ -191,8 +160,6 @@ class WebRtcHost(
                     activeSpec = null
                     baseCaptureWidth = 0
                     baseCaptureHeight = 0
-                    capturedContentWidth = 0
-                    capturedContentHeight = 0
                     onProjectionStopped()
                 }
             }
@@ -276,7 +243,6 @@ class WebRtcHost(
         }
         val spec = activeSpec
         val display = physicalDisplaySize()
-        val source = captureSourceSize()
         val caps = SessionCapabilities.snapshot()
         val heartbeatAge = if (lastHeartbeatAt > 0L) System.currentTimeMillis() - lastHeartbeatAt else -1L
         return JSONObject()
@@ -293,9 +259,9 @@ class WebRtcHost(
             .put("maxBitrateBps", spec?.maxBitrateBps ?: 0)
             .put("displayWidth", display.x)
             .put("displayHeight", display.y)
-            .put("captureContentWidth", source.x)
-            .put("captureContentHeight", source.y)
-            .put("orientation", orientationLabel(source))
+            .put("captureContentWidth", display.x)
+            .put("captureContentHeight", display.y)
+            .put("orientation", orientationLabel(display))
             .put("baseCaptureWidth", baseCaptureWidth)
             .put("baseCaptureHeight", baseCaptureHeight)
             .put("displayRevision", displayRevision)
@@ -386,8 +352,6 @@ class WebRtcHost(
             activeSpec = null
             baseCaptureWidth = 0
             baseCaptureHeight = 0
-            capturedContentWidth = 0
-            capturedContentHeight = 0
             try { capturer.dispose() } catch (_: Exception) {}
             try { textureHelper.dispose() } catch (_: Exception) {}
             try { videoTrack.dispose() } catch (_: Exception) {}
@@ -399,40 +363,29 @@ class WebRtcHost(
     }
 
     private fun physicalDisplaySize(): Point {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                val bounds = context.getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds
-                if (bounds.width() > 1 && bounds.height() > 1) return Point(bounds.width(), bounds.height())
-            } catch (_: Exception) {}
-        }
         val display = displayManager?.getDisplay(Display.DEFAULT_DISPLAY)
         if (display != null) {
             @Suppress("DEPRECATION")
             val metrics = android.util.DisplayMetrics().also { display.getRealMetrics(it) }
-            if (metrics.widthPixels > 0 && metrics.heightPixels > 0) {
-                return Point(metrics.widthPixels, metrics.heightPixels)
+            var width = metrics.widthPixels.coerceAtLeast(2)
+            var height = metrics.heightPixels.coerceAtLeast(2)
+            @Suppress("DEPRECATION")
+            val rotation = display.rotation
+            val rotatedLandscape = rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_270
+            // Some OEMs report real metrics in natural orientation briefly during rotation.
+            // Normalize the pair to the display's actual rotation.
+            if (rotatedLandscape && width < height) {
+                val tmp = width; width = height; height = tmp
+            } else if (!rotatedLandscape && width > height && rotation == Surface.ROTATION_0) {
+                val tmp = width; width = height; height = tmp
             }
+            return Point(width, height)
         }
         val dm = context.resources.displayMetrics
         return Point(dm.widthPixels.coerceAtLeast(2), dm.heightPixels.coerceAtLeast(2))
     }
 
-    /** Full-display capture uses the display as authority when MediaProjection reports stale geometry. */
-    private fun captureSourceSize(): Point {
-        val display = physicalDisplaySize()
-        val width = capturedContentWidth
-        val height = capturedContentHeight
-        if (width <= 1 || height <= 1) return display
-
-        val callbackLandscape = width > height
-        val displayLandscape = display.x > display.y
-        if (callbackLandscape != displayLandscape) return display
-
-        val displayAspect = maxOf(display.x, display.y).toFloat() / minOf(display.x, display.y).coerceAtLeast(1)
-        val callbackAspect = maxOf(width, height).toFloat() / minOf(width, height).coerceAtLeast(1)
-        val aspectError = abs(callbackAspect - displayAspect) / displayAspect
-        return if (aspectError <= MAX_CAPTURE_ASPECT_ERROR) Point(width, height) else display
-    }
+    private fun even(value: Int): Int = (value.coerceAtLeast(2) / 2) * 2
 
     private fun scaledSizeFor(source: Point, maxEdge: Int): Pair<Int, Int> {
         var width = source.x.coerceAtLeast(2)
@@ -443,9 +396,7 @@ class WebRtcHost(
             width = (width * scale).toInt()
             height = (height * scale).toInt()
         }
-        width = (width / 2 * 2).coerceAtLeast(2)
-        height = (height / 2 * 2).coerceAtLeast(2)
-        return width to height
+        return even(width) to even(height)
     }
 
     private fun orientationLabel(size: Point): String = if (size.x > size.y) "landscape" else "portrait"
@@ -458,18 +409,18 @@ class WebRtcHost(
             return
         }
         val display = physicalDisplaySize()
-        val source = captureSourceSize()
-        val (baseWidth, baseHeight) = scaledSizeFor(source, BASE_CAPTURE_MAX_EDGE)
+        val baseWidth = even(display.x)
+        val baseHeight = even(display.y)
+        // Keep the VirtualDisplay at the real full-screen geometry. Downscaling belongs to
+        // VideoSource/encoder, not to MediaProjection; mixing the two caused crop/zoom on rotate.
         capturer.startCapture(baseWidth, baseHeight, BASE_CAPTURE_FPS)
         baseCaptureWidth = baseWidth
         baseCaptureHeight = baseHeight
         lastDisplayWidth = display.x
         lastDisplayHeight = display.y
-        lastSourceWidth = source.x
-        lastSourceHeight = source.y
         displayRevision += 1L
         captureStarted = true
-        applyOutputProfile(source)
+        applyOutputProfile(display)
         applyCapabilities()
     }
 
@@ -480,8 +431,6 @@ class WebRtcHost(
     }
 
     private fun requestGeometryRepair() {
-        capturedContentWidth = 0
-        capturedContentHeight = 0
         forceGeometryRefresh = true
         scheduleGeometryRefresh(0L)
     }
@@ -489,15 +438,13 @@ class WebRtcHost(
     private fun refreshCaptureGeometryAsync() {
         if (disposed || !captureStarted) return
         val display = physicalDisplaySize()
-        val source = captureSourceSize()
         val forced = forceGeometryRefresh
-        val changed = forced ||
-            display.x != lastDisplayWidth || display.y != lastDisplayHeight ||
-            source.x != lastSourceWidth || source.y != lastSourceHeight
+        val changed = forced || display.x != lastDisplayWidth || display.y != lastDisplayHeight
         if (!changed) return
         forceGeometryRefresh = false
 
-        val (wantedBaseWidth, wantedBaseHeight) = scaledSizeFor(source, BASE_CAPTURE_MAX_EDGE)
+        val wantedBaseWidth = even(display.x)
+        val wantedBaseHeight = even(display.y)
         captureGeometryExecutor.execute {
             if (disposed || !captureStarted) return@execute
             try {
@@ -509,14 +456,12 @@ class WebRtcHost(
                 baseCaptureHeight = wantedBaseHeight
                 lastDisplayWidth = display.x
                 lastDisplayHeight = display.y
-                lastSourceWidth = source.x
-                lastSourceHeight = source.y
                 displayRevision += 1L
-                applyOutputProfile(source)
+                applyOutputProfile(display)
                 applySenderPolicy()
                 sendDisplayGeometry()
             } catch (e: Exception) {
-                Log.w(TAG, "Falha ao adaptar captura à geometria ${source.x}x${source.y}", e)
+                Log.w(TAG, "Falha ao adaptar captura à geometria ${display.x}x${display.y}", e)
             }
         }
     }
@@ -531,12 +476,12 @@ class WebRtcHost(
         return true
     }
 
-    private fun desiredCaptureSpec(source: Point = captureSourceSize()): CaptureSpec {
+    private fun desiredCaptureSpec(source: Point = physicalDisplaySize()): CaptureSpec {
         val landscape = source.x > source.y
         val settings = when (captureProfile) {
             "economy" -> Triple(if (landscape) 960 else 720, 24, 250_000 to 1_800_000)
             "high" -> Triple(1440, 30, 700_000 to 7_500_000)
-            "fluid" -> Triple(if (landscape) 1280 else 1080, 60, 500_000 to 6_500_000)
+            "fluid" -> Triple(if (landscape) 1280 else 1080, 30, 500_000 to 6_500_000)
             "auto", "balanced" -> Triple(if (landscape) 1280 else 1080, 30, 400_000 to 4_800_000)
             else -> Triple(if (landscape) 1280 else 1080, 30, 400_000 to 4_800_000)
         }
@@ -544,7 +489,7 @@ class WebRtcHost(
         return CaptureSpec(width, height, settings.second, settings.third.first, settings.third.second)
     }
 
-    private fun applyOutputProfile(source: Point = captureSourceSize()) {
+    private fun applyOutputProfile(source: Point = physicalDisplaySize()) {
         if (!captureStarted || disposed) return
         val wanted = desiredCaptureSpec(source)
         try {
@@ -560,8 +505,6 @@ class WebRtcHost(
         val spec = activeSpec ?: return
         try {
             val params = sender.parameters
-            // BALANCED avoids the previous pathological case where MAINTAIN_FRAMERATE reduced
-            // a landscape stream all the way to a small portrait-looking resolution on congestion.
             params.degradationPreference = RtpParameters.DegradationPreference.BALANCED
             params.encodings.forEach { encoding ->
                 encoding.minBitrateBps = spec.minBitrateBps
@@ -596,7 +539,6 @@ class WebRtcHost(
         val target = channel ?: return
         if (!controlAuthenticated || target.state() != DataChannel.State.OPEN) return
         val display = physicalDisplaySize()
-        val source = captureSourceSize()
         val spec = activeSpec
         sendJson(
             target,
@@ -604,9 +546,9 @@ class WebRtcHost(
                 .put("type", "display_geometry")
                 .put("displayWidth", display.x)
                 .put("displayHeight", display.y)
-                .put("captureContentWidth", source.x)
-                .put("captureContentHeight", source.y)
-                .put("orientation", orientationLabel(source))
+                .put("captureContentWidth", display.x)
+                .put("captureContentHeight", display.y)
+                .put("orientation", orientationLabel(display))
                 .put("streamWidth", spec?.width ?: 0)
                 .put("streamHeight", spec?.height ?: 0)
                 .put("revision", displayRevision)
@@ -995,11 +937,9 @@ class WebRtcHost(
     companion object {
         private const val TAG = "RemoteLinkWebRtc"
         private const val MAX_CONTROL_MESSAGE_BYTES = 16 * 1024
-        private const val BASE_CAPTURE_MAX_EDGE = 1440
-        private const val BASE_CAPTURE_FPS = 60
+        private const val BASE_CAPTURE_FPS = 30
         private const val DISPLAY_CHANGE_DEBOUNCE_MS = 80L
-        private const val ROTATION_VERIFY_DELAY_MS = 450L
-        private const val MAX_CAPTURE_ASPECT_ERROR = 0.12f
+        private const val ROTATION_VERIFY_DELAY_MS = 420L
         private const val WATCHDOG_INTERVAL_MS = 5_000L
         private const val WATCHDOG_TIMEOUT_MS = 30_000L
         private const val FILE_APPROVAL_TIMEOUT_MS = 30_000L
