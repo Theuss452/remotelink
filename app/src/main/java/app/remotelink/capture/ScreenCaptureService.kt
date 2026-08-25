@@ -9,6 +9,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import app.remotelink.security.SessionCapabilities
 import app.remotelink.webrtc.WebRtcHost
 import org.json.JSONObject
 
@@ -30,7 +31,11 @@ class ScreenCaptureService : Service() {
             }
             ACTION_FILE_APPROVE -> {
                 val id = intent.getStringExtra(EXTRA_TRANSFER_ID).orEmpty()
-                webRtcHost?.resolveFileApproval(id, true)
+                if (SessionCapabilities.canReceiveFiles()) {
+                    webRtcHost?.resolveFileApproval(id, true)
+                } else {
+                    webRtcHost?.resolveFileApproval(id, false)
+                }
                 getSystemService(NotificationManager::class.java).cancel(FILE_NOTIFICATION_ID)
                 return START_NOT_STICKY
             }
@@ -56,6 +61,7 @@ class ScreenCaptureService : Service() {
             return START_NOT_STICKY
         }
 
+        SessionCapabilities.setScreen(true)
         val notification = buildNotification()
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(
@@ -75,8 +81,18 @@ class ScreenCaptureService : Service() {
             webRtcHost = WebRtcHost(
                 applicationContext,
                 data,
-                onProjectionStopped = { Handler(Looper.getMainLooper()).post { stopProjection() } },
-                onFileApprovalRequested = { request -> Handler(Looper.getMainLooper()).post { showFileApprovalNotification(request) } }
+                onProjectionStopped = {
+                    Handler(Looper.getMainLooper()).post { stopProjection() }
+                },
+                onFileApprovalRequested = { request ->
+                    Handler(Looper.getMainLooper()).post {
+                        if (SessionCapabilities.canReceiveFiles()) {
+                            showFileApprovalNotification(request)
+                        } else {
+                            webRtcHost?.resolveFileApproval(request.id, false)
+                        }
+                    }
+                }
             )
         } catch (t: Throwable) {
             Log.e(TAG, "Falha ao inicializar WebRTC/MediaProjection", t)
@@ -100,16 +116,39 @@ class ScreenCaptureService : Service() {
     fun drainLocalCandidates(sessionHash: String): List<WebRtcHost.SignalCandidate> =
         webRtcHost?.drainLocalCandidates(sessionHash) ?: emptyList()
 
-    fun connectionState(sessionHash: String): String = webRtcHost?.connectionState(sessionHash) ?: "closed"
+    fun connectionState(sessionHash: String): String =
+        webRtcHost?.connectionState(sessionHash) ?: "closed"
 
     fun diagnosticState(sessionHash: String): JSONObject =
-        webRtcHost?.diagnosticState(sessionHash) ?: JSONObject().put("peer", "closed").put("ice", "closed")
+        (webRtcHost?.diagnosticState(sessionHash)
+            ?: JSONObject().put("peer", "closed").put("ice", "closed"))
+            .put("capScreen", SessionCapabilities.canViewScreen())
+            .put("capTouch", SessionCapabilities.canTouch())
+            .put("capKeyboard", SessionCapabilities.canUseKeyboard())
+            .put("capFiles", SessionCapabilities.canReceiveFiles())
 
     fun setCaptureProfile(sessionHash: String, profile: String): Boolean =
         webRtcHost?.setCaptureProfile(sessionHash, profile) == true
 
-    fun endSession(sessionHash: String) { webRtcHost?.endSession(sessionHash) }
-    fun stopAll() { stopProjection() }
+    fun endSession(sessionHash: String) {
+        webRtcHost?.endSession(sessionHash)
+    }
+
+    /** Revoking screen access is intentionally destructive and fail-closed. */
+    fun applyCapabilities() {
+        if (!SessionCapabilities.canViewScreen()) stopProjection()
+    }
+
+    fun cancelPendingFileTransfer() {
+        getSystemService(NotificationManager::class.java).cancel(FILE_NOTIFICATION_ID)
+        // The receiver independently checks SessionCapabilities on every chunk and finish,
+        // so a revoked file capability cannot continue writing even if a stale peer sends data.
+    }
+
+    fun stopAll() {
+        stopProjection()
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun stopProjection() {
@@ -133,7 +172,11 @@ class ScreenCaptureService : Service() {
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
             getSystemService(NotificationManager::class.java).createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Transmissão de tela", NotificationManager.IMPORTANCE_LOW)
+                NotificationChannel(
+                    CHANNEL_ID,
+                    "Transmissão de tela",
+                    NotificationManager.IMPORTANCE_LOW
+                )
             )
         }
     }
@@ -155,17 +198,26 @@ class ScreenCaptureService : Service() {
 
     private fun buildNotification(): Notification {
         val stopIntent = Intent(this, ScreenCaptureService::class.java).setAction(ACTION_STOP)
-        val pi = PendingIntent.getService(this, 1, stopIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val pi = PendingIntent.getService(
+            this,
+            1,
+            stopIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.presence_video_online)
             .setContentTitle("RemoteLink • transmissão autorizada")
-            .setContentText("A tela só é enviada durante uma sessão aprovada. Toque em Revogar para encerrar imediatamente.")
+            .setContentText("Sessão local protegida. Você pode revogar a transmissão imediatamente.")
             .setOngoing(true)
-            .addAction(Notification.Action.Builder(null, "Revogar transmissão", pi).build())
+            .addAction(Notification.Action.Builder(null, "Desconectar", pi).build())
             .build()
     }
 
     private fun showFileApprovalNotification(request: WebRtcHost.FileApprovalRequest) {
+        if (!SessionCapabilities.canReceiveFiles()) {
+            webRtcHost?.resolveFileApproval(request.id, false)
+            return
+        }
         val approveIntent = Intent(this, ScreenCaptureService::class.java)
             .setAction(ACTION_FILE_APPROVE)
             .putExtra(EXTRA_TRANSFER_ID, request.id)
@@ -173,30 +225,41 @@ class ScreenCaptureService : Service() {
             .setAction(ACTION_FILE_DENY)
             .putExtra(EXTRA_TRANSFER_ID, request.id)
         val approve = PendingIntent.getService(
-            this, 2001, approveIntent,
+            this,
+            2001,
+            approveIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val deny = PendingIntent.getService(
-            this, 2002, denyIntent,
+            this,
+            2002,
+            denyIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val sizeMb = request.size.toDouble() / (1024.0 * 1024.0)
-        val sizeText = if (request.size < 1024 * 1024) "${request.size / 1024} KB" else "%.1f MB".format(sizeMb)
+        val sizeText = if (request.size < 1024 * 1024) {
+            "${request.size / 1024} KB"
+        } else {
+            "%.1f MB".format(sizeMb)
+        }
         val notification = Notification.Builder(this, FILE_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle("Receber arquivo pelo RemoteLink?")
             .setContentText("${request.name} • $sizeText")
-            .setStyle(Notification.BigTextStyle().bigText(
-                "Um navegador já pareado quer enviar '${request.name}' ($sizeText). " +
-                    "Nenhum byte do arquivo será aceito até você permitir."
-            ))
+            .setStyle(
+                Notification.BigTextStyle().bigText(
+                    "Um navegador já pareado quer enviar '${request.name}' ($sizeText). " +
+                        "Nenhum byte do arquivo será aceito até você permitir."
+                )
+            )
             .setAutoCancel(false)
             .setOngoing(true)
             .setTimeoutAfter(FILE_APPROVAL_TIMEOUT_MS)
             .addAction(Notification.Action.Builder(null, "Recusar", deny).build())
             .addAction(Notification.Action.Builder(null, "Permitir", approve).build())
             .build()
-        getSystemService(NotificationManager::class.java).notify(FILE_NOTIFICATION_ID, notification)
+        getSystemService(NotificationManager::class.java)
+            .notify(FILE_NOTIFICATION_ID, notification)
     }
 
     companion object {
@@ -213,7 +276,8 @@ class ScreenCaptureService : Service() {
         private const val FILE_NOTIFICATION_ID = 4102
         private const val FILE_APPROVAL_TIMEOUT_MS = 30_000L
 
-        @Volatile var instance: ScreenCaptureService? = null
+        @Volatile
+        var instance: ScreenCaptureService? = null
             private set
 
         fun intent(context: Context, resultCode: Int, data: Intent) =
