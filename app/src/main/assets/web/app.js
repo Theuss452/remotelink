@@ -13,7 +13,7 @@ const el = {
 let token=sessionStorage.getItem('remotelink_session')||'';
 let pc=null, control=null, controlReady=false, channelAuthenticated=false, commandSeq=0;
 let remoteCandidateTimer=null, statsTimer=null, stateTimer=null;
-let browserCandidates=[], answerInstalled=false, pointerStart=null, lastBytes=null, lastBytesAt=null, fitMode='contain';
+let browserCandidates=[], answerInstalled=false, pointerStart=null, lastBytes=null, lastBytesAt=null;
 let connectGeneration=0, controlMode=false, controlHistoryArmed=false, suppressHistoryPop=false;
 let wheelAccumX=0,wheelAccumY=0,wheelTimer=null,wheelAnchor={x:.5,y:.5};
 let remoteGeometry={displayWidth:0,displayHeight:0,orientation:'unknown',revision:0};
@@ -27,7 +27,18 @@ function jsonHeaders(){return {...authHeaders(),'Content-Type':'application/json
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 function prettyState(s){return ({new:'iniciando',connecting:'conectando',connected:'conectado',disconnected:'instável',failed:'falhou',closed:'encerrado'})[s]||s;}
 
+function enforceAutoFit(){
+  // A remote desktop must never crop the source image. `cover` intentionally zooms
+  // and cuts the frame, which made landscape unusable and also broke touch mapping.
+  el.video.style.objectFit='contain';
+  el.video.style.objectPosition='center center';
+  el.video.style.transform='none';
+  el.stage.classList.add('auto-fit');
+  if(el.fit){el.fit.textContent='◎';el.fit.title='Ajuste automático ativo • sem recorte';}
+}
+
 function updateViewerGeometry(force=false){
+  enforceAutoFit();
   const vw=el.video.videoWidth||0,vh=el.video.videoHeight||0;
   const orientation=(vw&&vh)?(vw>vh?'landscape':'portrait'):remoteGeometry.orientation;
   const key=`${vw}x${vh}:${orientation}:${remoteGeometry.revision}`;
@@ -39,7 +50,6 @@ function updateViewerGeometry(force=false){
   document.documentElement.classList.toggle('remote-landscape',landscape);
   document.documentElement.classList.toggle('remote-portrait',orientation==='portrait');
   el.stage.style.setProperty('--remote-aspect',vw&&vh?`${vw} / ${vh}`:(landscape?'16 / 9':'9 / 16'));
-  // Rotation changes invalidate a gesture that began in the old coordinate space.
   if(pointerStart){pointerStart=null;sendControl({type:'drag_cancel'});}
 }
 function applyRemoteGeometry(data){
@@ -65,13 +75,13 @@ function tuneReceiverForLowLatency(receiver){if(!receiver)return;try{if('jitterB
 async function startWebRtc(){
   if(!token)throw new Error('Sessão de pareamento ausente.');if(!('RTCPeerConnection'in window))throw new Error('Este navegador não oferece WebRTC.');
   const generation=++connectGeneration;await waitForCaptureReady();if(generation!==connectGeneration||!token)return;
-  closePeerOnly(false);setConnectOverlay(true,'Criando conexão WebRTC…');el.title.textContent='Conectando ao Android';browserCandidates=[];answerInstalled=false;controlReady=false;channelAuthenticated=false;commandSeq=0;
+  closePeerOnly(false);setConnectOverlay(true,'Criando conexão WebRTC…');el.title.textContent='Conectando ao Android';browserCandidates=[];answerInstalled=false;controlReady=false;channelAuthenticated=false;commandSeq=0;enforceAutoFit();
   pc=new RTCPeerConnection({iceServers:[],iceTransportPolicy:'all',bundlePolicy:'max-bundle'});
   const videoTransceiver=pc.addTransceiver('video',{direction:'recvonly'});preferHardwareFriendlyVideoCodec(videoTransceiver);tuneReceiverForLowLatency(videoTransceiver.receiver);
   control=pc.createDataChannel('control',{ordered:true});bindControlChannel(control);
-  pc.ontrack=ev=>{tuneReceiverForLowLatency(ev.receiver);const stream=ev.streams?.[0]||new MediaStream([ev.track]);el.video.srcObject=stream;el.video.play().catch(()=>{});el.placeholder.classList.add('hidden');el.stage.classList.add('streaming');el.title.textContent='Android conectado';updateViewerGeometry(true);};
-  el.video.onloadedmetadata=()=>{el.video.play().catch(()=>{});updateViewerGeometry(true);};
-  el.video.onresize=()=>updateViewerGeometry(true);
+  pc.ontrack=ev=>{tuneReceiverForLowLatency(ev.receiver);const stream=ev.streams?.[0]||new MediaStream([ev.track]);el.video.srcObject=stream;enforceAutoFit();el.video.play().catch(()=>{});el.placeholder.classList.add('hidden');el.stage.classList.add('streaming');el.title.textContent='Android conectado';updateViewerGeometry(true);};
+  el.video.onloadedmetadata=()=>{enforceAutoFit();el.video.play().catch(()=>{});updateViewerGeometry(true);};
+  el.video.onresize=()=>{enforceAutoFit();updateViewerGeometry(true);};
   pc.onconnectionstatechange=()=>updateConnectionState(pc?.connectionState||'closed');pc.oniceconnectionstatechange=()=>{if(pc?.iceConnectionState==='failed')setConnectOverlay(false);};
   pc.onicecandidate=ev=>{if(!ev.candidate)return;const c=ev.candidate.toJSON?ev.candidate.toJSON():ev.candidate;if(answerInstalled)postBrowserCandidate(c).catch(()=>{});else browserCandidates.push(c);};
   const offer=await pc.createOffer();await pc.setLocalDescription(offer);setConnectOverlay(true,'Aguardando resposta do celular…');const r=await fetch('/api/webrtc/offer',{method:'POST',headers:jsonHeaders(),body:JSON.stringify({sdp:offer.sdp})});const data=await safeJson(r);if(!r.ok){if(data.error==='capture_not_ready'){setConnectOverlay(true,'A captura ainda está iniciando no Android. Tentando novamente…');await sleep(650);return startWebRtc();}throw new Error(data.detail||'Falha ao criar a sessão WebRTC.');}await pc.setRemoteDescription({type:'answer',sdp:data.sdp});answerInstalled=true;pc.getReceivers().forEach(tuneReceiverForLowLatency);await Promise.allSettled(browserCandidates.splice(0).map(postBrowserCandidate));startRemoteCandidatePolling();startStatePolling();startStats();
@@ -81,7 +91,7 @@ function startRemoteCandidatePolling(){clearInterval(remoteCandidateTimer);remot
 function startStatePolling(){clearInterval(stateTimer);stateTimer=setInterval(async()=>{if(!token)return;try{const r=await fetch('/api/webrtc/state',{headers:authHeaders(),cache:'no-store'});if(!r.ok)return;const d=await r.json();updateReadiness(d.captureReady,d.accessibilityReady);applyRemoteGeometry(d);if(channelAuthenticated&&control?.readyState==='open')setControlEnabled(!!d.accessibilityReady);}catch{}},700);}
 
 function bindControlChannel(ch){ch.onopen=()=>ch.send(JSON.stringify({type:'auth',token}));ch.onclose=()=>{channelAuthenticated=false;setControlEnabled(false);exitControlMode(false);};ch.onerror=ch.onclose;ch.onmessage=ev=>{let d;try{d=JSON.parse(ev.data);}catch{return;}if(d.type==='hello'&&ch.readyState==='open')ch.send(JSON.stringify({type:'auth',token}));if(d.type==='auth_ok'){channelAuthenticated=true;setControlEnabled(!!d.controlReady);setConnectOverlay(false);el.hint.classList.remove('hidden');setTimeout(()=>el.hint.classList.add('hidden'),3500);}if(d.type==='display_geometry')applyRemoteGeometry(d);if(d.type==='auth_failed'){channelAuthenticated=false;setMessage('A autenticação do canal de controle falhou.','error');setControlEnabled(false);}if(d.type==='pong'){const started=pings.get(d.id);if(started){el.latency.textContent=`${Math.max(1,Math.round(performance.now()-started))} ms`;pings.delete(d.id);}}if(d.type==='control_error'&&d.error==='accessibility_disabled'){updateReadiness(true,false);setControlEnabled(false);}};}
-function updateConnectionState(state){el.rtcState.textContent=prettyState(state);el.rtcState.classList.toggle('live',state==='connected');if(state==='connected'){setConnectOverlay(false);el.disconnectTop.classList.remove('hidden');el.fullscreen.disabled=false;el.fit.disabled=false;el.stage.classList.add('connected');el.pairButton.textContent='Conectado';el.pairButton.disabled=true;setMessage('Transmissão conectada. A orientação acompanha o Android automaticamente.','success');}else if(state==='failed'||state==='closed'){setConnectOverlay(false);setControlEnabled(false);el.stage.classList.remove('connected');exitControlMode(false);}}
+function updateConnectionState(state){el.rtcState.textContent=prettyState(state);el.rtcState.classList.toggle('live',state==='connected');if(state==='connected'){setConnectOverlay(false);el.disconnectTop.classList.remove('hidden');el.fullscreen.disabled=false;el.fit.disabled=false;el.stage.classList.add('connected');enforceAutoFit();el.pairButton.textContent='Conectado';el.pairButton.disabled=true;setMessage('Transmissão conectada. Ajuste automático sem recorte ativo.','success');}else if(state==='failed'||state==='closed'){setConnectOverlay(false);setControlEnabled(false);el.stage.classList.remove('connected');exitControlMode(false);}}
 function setControlEnabled(enabled){controlReady=enabled;[el.back,el.home,el.recents,el.text,el.sendText].forEach(x=>x.disabled=!enabled);}
 function sendControl(payload){if(!controlReady||!control||control.readyState!=='open')return false;control.send(JSON.stringify({...payload,seq:++commandSeq}));return true;}
 el.back.addEventListener('click',()=>sendControl({type:'back'}));el.home.addEventListener('click',()=>sendControl({type:'home'}));el.recents.addEventListener('click',()=>sendControl({type:'recents'}));el.sendText.addEventListener('click',sendText);el.text.addEventListener('keydown',ev=>{if(ev.key==='Enter'){ev.preventDefault();sendText();}});function sendText(){if(!el.text.value)return;if(sendControl({type:'text',text:el.text.value}))setMessage('Texto enviado ao campo selecionado.','success');}
@@ -92,9 +102,9 @@ window.addEventListener('popstate',()=>{if(suppressHistoryPop){suppressHistoryPo
 
 function normalizedPoint(clientX,clientY){
   const rect=el.video.getBoundingClientRect(),vw=el.video.videoWidth,vh=el.video.videoHeight;if(!vw||!vh||!rect.width||!rect.height)return null;
-  const computed=getComputedStyle(el.video).objectFit||fitMode;
-  const mode=computed==='cover'?'cover':'contain';
-  const scale=mode==='contain'?Math.min(rect.width/vw,rect.height/vh):Math.max(rect.width/vw,rect.height/vh);
+  // Rendering is always `contain`; calculate against exactly the same letterboxed
+  // rectangle so clicks never target cropped/off-screen pixels.
+  const scale=Math.min(rect.width/vw,rect.height/vh);
   const displayW=vw*scale,displayH=vh*scale,offX=(rect.width-displayW)/2,offY=(rect.height-displayH)/2;
   const x=(clientX-rect.left-offX)/displayW,y=(clientY-rect.top-offY)/displayH;if(x<0||x>1||y<0||y>1)return null;return{x,y};
 }
@@ -108,12 +118,14 @@ el.stage.addEventListener('wheel',ev=>{if(!controlMode||!controlReady||!el.stage
 function remoteKeyboardHandler(ev){if(!controlMode||!controlReady||!channelAuthenticated)return;const target=ev.target;const localTyping=target===el.text||target===el.code||target instanceof HTMLTextAreaElement;if(localTyping)return;if(ev.key==='Escape'){ev.preventDefault();ev.stopImmediatePropagation();exitControlMode(true);setMessage('Modo controle desativado.');return;}let sent=false;if((ev.ctrlKey||ev.metaKey)&&!ev.altKey&&ev.key.toLowerCase()==='a')sent=sendControl({type:'key_select_all'});else if(!ev.ctrlKey&&!ev.metaKey&&!ev.altKey&&ev.key==='Backspace')sent=sendControl({type:'key_backspace'});else if(!ev.ctrlKey&&!ev.metaKey&&!ev.altKey&&ev.key==='Delete')sent=sendControl({type:'key_delete'});else if(!ev.ctrlKey&&!ev.metaKey&&!ev.altKey&&ev.key==='ArrowLeft')sent=sendControl({type:'key_cursor',direction:'left'});else if(!ev.ctrlKey&&!ev.metaKey&&!ev.altKey&&ev.key==='ArrowRight')sent=sendControl({type:'key_cursor',direction:'right'});else if(!ev.ctrlKey&&!ev.metaKey&&!ev.altKey&&ev.key==='Home')sent=sendControl({type:'key_cursor',direction:'home'});else if(!ev.ctrlKey&&!ev.metaKey&&!ev.altKey&&ev.key==='End')sent=sendControl({type:'key_cursor',direction:'end'});else if(!ev.ctrlKey&&!ev.metaKey&&!ev.altKey&&ev.key==='Enter')sent=sendControl({type:'key_enter'});else if(!ev.ctrlKey&&!ev.metaKey&&!ev.altKey&&ev.key.length===1)sent=sendControl({type:'key_text',text:ev.key});if(sent){ev.preventDefault();ev.stopImmediatePropagation();}}
 document.addEventListener('keydown',remoteKeyboardHandler,true);window.addEventListener('blur',()=>{if(pointerStart){pointerStart=null;sendControl({type:'drag_cancel'});}});document.addEventListener('visibilitychange',()=>{if(document.hidden&&pointerStart){pointerStart=null;sendControl({type:'drag_cancel'});}});
 
-el.fullscreen.addEventListener('click',async()=>{try{if(!document.fullscreenElement)await el.stage.requestFullscreen();else await document.exitFullscreen();}catch{}});
-el.fit.addEventListener('click',()=>{fitMode=fitMode==='contain'?'cover':'contain';el.video.style.objectFit=fitMode;el.fit.textContent=fitMode==='contain'?'↕':'↔';el.fit.title=fitMode==='contain'?'Preencher tela':'Ajustar tela';updateViewerGeometry(true);});el.disconnectTop.addEventListener('click',()=>disconnect(true));
+el.fullscreen.addEventListener('click',async()=>{try{enforceAutoFit();if(!document.fullscreenElement)await el.stage.requestFullscreen();else await document.exitFullscreen();}catch{}});
+el.fit.addEventListener('click',()=>{enforceAutoFit();updateViewerGeometry(true);setMessage('Ajuste automático ativo: imagem inteira, sem zoom nem recorte.','success');});
+document.addEventListener('fullscreenchange',()=>{enforceAutoFit();requestAnimationFrame(()=>updateViewerGeometry(true));});
+el.disconnectTop.addEventListener('click',()=>disconnect(true));
 
 function startStats(){clearInterval(statsTimer);lastBytes=null;lastBytesAt=null;statsTimer=setInterval(async()=>{if(!pc)return;try{const stats=await pc.getStats();let inbound=null;stats.forEach(r=>{if(r.type==='inbound-rtp'&&r.kind==='video')inbound=r;});if(inbound){const w=inbound.frameWidth||el.video.videoWidth,h=inbound.frameHeight||el.video.videoHeight;el.resolution.textContent=w&&h?`${w}×${h}`:'—';el.fps.textContent=inbound.framesPerSecond?`${Math.round(inbound.framesPerSecond)}`:'—';if(w&&h&&((w>h)!==el.stage.classList.contains('remote-landscape')))updateViewerGeometry(true);const now=performance.now();if(lastBytes!=null&&inbound.bytesReceived!=null){const seconds=(now-lastBytesAt)/1000,mbps=((inbound.bytesReceived-lastBytes)*8/seconds)/1_000_000;el.bitrate.textContent=`${Math.max(0,mbps).toFixed(1)} Mb/s`;}lastBytes=inbound.bytesReceived;lastBytesAt=now;}if(control?.readyState==='open'&&channelAuthenticated){const id=Date.now();pings.set(id,performance.now());control.send(JSON.stringify({type:'ping',id}));setTimeout(()=>pings.delete(id),10000);}}catch{}},800);}
 
-async function disconnect(invalidateSession){connectGeneration++;exitControlMode(false);controlHistoryArmed=false;const currentToken=token;if(invalidateSession&&currentToken){try{await fetch('/api/session/stop',{method:'POST',headers:{'Authorization':`Bearer ${currentToken}`},keepalive:true});}catch{}sessionStorage.removeItem('remotelink_session');token='';}closePeerOnly(false);el.placeholder.classList.remove('hidden');el.stage.classList.remove('streaming','connected','remote-landscape','remote-portrait');document.documentElement.classList.remove('remote-landscape','remote-portrait');el.video.srcObject=null;el.title.textContent='Aguardando conexão';el.disconnectTop.classList.add('hidden');el.fullscreen.disabled=true;el.fit.disabled=true;el.rtcState.textContent='offline';el.rtcState.classList.remove('live');setControlEnabled(false);el.latency.textContent=el.resolution.textContent=el.fps.textContent=el.bitrate.textContent='—';remoteGeometry={displayWidth:0,displayHeight:0,orientation:'unknown',revision:0};lastVideoGeometry='';if(invalidateSession){el.pairButton.textContent='Conectar';el.pairButton.disabled=false;el.code.value='';setMessage('Sessão encerrada. Gere um novo código no Android para iniciar outra sessão.');}}
+async function disconnect(invalidateSession){connectGeneration++;exitControlMode(false);controlHistoryArmed=false;const currentToken=token;if(invalidateSession&&currentToken){try{await fetch('/api/session/stop',{method:'POST',headers:{'Authorization':`Bearer ${currentToken}`},keepalive:true});}catch{}sessionStorage.removeItem('remotelink_session');token='';}closePeerOnly(false);el.placeholder.classList.remove('hidden');el.stage.classList.remove('streaming','connected','remote-landscape','remote-portrait');document.documentElement.classList.remove('remote-landscape','remote-portrait');el.video.srcObject=null;enforceAutoFit();el.title.textContent='Aguardando conexão';el.disconnectTop.classList.add('hidden');el.fullscreen.disabled=true;el.fit.disabled=true;el.rtcState.textContent='offline';el.rtcState.classList.remove('live');setControlEnabled(false);el.latency.textContent=el.resolution.textContent=el.fps.textContent=el.bitrate.textContent='—';remoteGeometry={displayWidth:0,displayHeight:0,orientation:'unknown',revision:0};lastVideoGeometry='';if(invalidateSession){el.pairButton.textContent='Conectar';el.pairButton.disabled=false;el.code.value='';setMessage('Sessão encerrada. Gere um novo código no Android para iniciar outra sessão.');}}
 function closePeerOnly(invalidateGeneration=true){if(invalidateGeneration)connectGeneration++;if(pointerStart)sendControl({type:'drag_cancel'});pointerStart=null;clearTimeout(wheelTimer);wheelTimer=null;wheelAccumX=wheelAccumY=0;clearInterval(remoteCandidateTimer);clearInterval(statsTimer);clearInterval(stateTimer);remoteCandidateTimer=statsTimer=stateTimer=null;try{control?.close();}catch{}control=null;try{pc?.close();}catch{}pc=null;browserCandidates=[];answerInstalled=false;controlReady=false;channelAuthenticated=false;commandSeq=0;pings.clear();}
 async function safeJson(r){try{return await r.json();}catch{return{};}}async function resumeIfPossible(){const s=await apiStatus();if(!s||!token)return;try{const r=await fetch('/api/webrtc/state',{headers:authHeaders(),cache:'no-store'});if(!r.ok)throw new Error();setMessage('Sessão anterior encontrada. Reconectando…');el.pairButton.disabled=true;await startWebRtc();}catch{sessionStorage.removeItem('remotelink_session');token='';el.pairButton.disabled=false;el.pairButton.textContent='Conectar';}}
-window.addEventListener('resize',()=>updateViewerGeometry());window.visualViewport?.addEventListener('resize',()=>updateViewerGeometry());window.addEventListener('pagehide',()=>{if(token){try{fetch('/api/session/stop',{method:'POST',headers:authHeaders(),keepalive:true});}catch{}}closePeerOnly();});resumeIfPossible();setInterval(apiStatus,5000);
+window.addEventListener('resize',()=>{enforceAutoFit();updateViewerGeometry();});window.visualViewport?.addEventListener('resize',()=>{enforceAutoFit();updateViewerGeometry();});window.addEventListener('pagehide',()=>{if(token){try{fetch('/api/session/stop',{method:'POST',headers:authHeaders(),keepalive:true});}catch{}}closePeerOnly();});enforceAutoFit();resumeIfPossible();setInterval(apiStatus,5000);
