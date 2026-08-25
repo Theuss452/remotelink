@@ -61,7 +61,6 @@ class ScreenCaptureService : Service() {
             return START_NOT_STICKY
         }
 
-        SessionCapabilities.setScreen(true)
         val notification = buildNotification()
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(
@@ -135,11 +134,6 @@ class ScreenCaptureService : Service() {
         webRtcHost?.endSession(sessionHash)
     }
 
-    /**
-     * Capability changes are live and reversible. In particular, disabling "Ver tela"
-     * now disables the WebRTC video track instead of destroying MediaProjection, so the
-     * user can turn it back on without going through Android's capture consent again.
-     */
     fun applyCapabilities() {
         webRtcHost?.applyCapabilities()
     }
