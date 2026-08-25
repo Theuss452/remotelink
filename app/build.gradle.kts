@@ -60,8 +60,11 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // Temporarily keep release bytecode unshrunk while stabilizing WebRTC/JNI.
+            // proguard-rules.pro already contains the keep rules needed when we
+            // safely re-enable R8 after runtime testing on multiple devices.
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
         }
