@@ -25,10 +25,18 @@ class IncomingFileReceiver(private val context: Context) {
     private var active: ActiveTransfer? = null
 
     @Synchronized
-    fun start(id: String, rawName: String, rawMime: String, size: Long): String? {
+    fun validateRequest(id: String, rawName: String, rawMime: String, size: Long): String? {
         if (active != null) return "transfer_busy"
         if (!ID_REGEX.matches(id)) return "invalid_id"
         if (size !in 1..MAX_FILE_BYTES) return "invalid_size"
+        if (sanitizeName(rawName) == null) return "invalid_name"
+        sanitizeMime(rawMime)
+        return null
+    }
+
+    @Synchronized
+    fun start(id: String, rawName: String, rawMime: String, size: Long): String? {
+        validateRequest(id, rawName, rawMime, size)?.let { return it }
         val name = sanitizeName(rawName) ?: return "invalid_name"
         val mime = sanitizeMime(rawMime)
         val temp = File.createTempFile("remotelink-", ".part", context.cacheDir)
