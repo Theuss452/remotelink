@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import app.remotelink.webrtc.WebRtcHost
 import org.json.JSONObject
 
@@ -66,13 +67,24 @@ class ScreenCaptureService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
 
-        webRtcHost?.dispose()
-        webRtcHost = WebRtcHost(
-            applicationContext,
-            data,
-            onProjectionStopped = { Handler(Looper.getMainLooper()).post { stopProjection() } },
-            onFileApprovalRequested = { request -> Handler(Looper.getMainLooper()).post { showFileApprovalNotification(request) } }
-        )
+        val previous = webRtcHost
+        webRtcHost = null
+        try { previous?.dispose() } catch (_: Exception) {}
+
+        try {
+            webRtcHost = WebRtcHost(
+                applicationContext,
+                data,
+                onProjectionStopped = { Handler(Looper.getMainLooper()).post { stopProjection() } },
+                onFileApprovalRequested = { request -> Handler(Looper.getMainLooper()).post { showFileApprovalNotification(request) } }
+            )
+        } catch (t: Throwable) {
+            Log.e(TAG, "Falha ao inicializar WebRTC/MediaProjection", t)
+            webRtcHost = null
+            try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
+            stopSelf()
+            return START_NOT_STICKY
+        }
         return START_NOT_STICKY
     }
 
@@ -105,7 +117,7 @@ class ScreenCaptureService : Service() {
         val host = webRtcHost
         webRtcHost = null
         try { host?.dispose() } catch (_: Exception) {}
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
         stopSelf()
     }
 
@@ -188,6 +200,7 @@ class ScreenCaptureService : Service() {
     }
 
     companion object {
+        private const val TAG = "RemoteLinkCapture"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_DATA = "data"
         const val EXTRA_TRANSFER_ID = "transferId"
