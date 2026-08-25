@@ -23,9 +23,18 @@ import java.util.concurrent.atomic.AtomicBoolean
 class WebRtcHost(
     private val context: Context,
     private val projectionPermissionData: Intent,
-    private val onProjectionStopped: () -> Unit
+    private val onProjectionStopped: () -> Unit,
+    private val onFileApprovalRequested: (FileApprovalRequest) -> Unit = {}
 ) {
     data class SignalCandidate(val sdpMid: String?, val sdpMLineIndex: Int, val candidate: String)
+    data class FileApprovalRequest(val id: String, val name: String, val mime: String, val size: Long)
+
+    private data class PendingFileApproval(
+        val request: FileApprovalRequest,
+        val channel: DataChannel,
+        val createdAt: Long = System.currentTimeMillis()
+    )
+
     private data class CaptureSpec(
         val width: Int,
         val height: Int,
@@ -62,21 +71,23 @@ class WebRtcHost(
     @Volatile private var iceState = "new"
     @Volatile private var gatheringState = "new"
     @Volatile private var localCandidateCount = 0
+    @Volatile private var pendingFileApproval: PendingFileApproval? = null
 
     private val watchdogRunnable = object : Runnable {
         override fun run() {
             if (!disposed) {
                 val now = System.currentTimeMillis()
+                val pending = pendingFileApproval
+                if (pending != null && now - pending.createdAt > FILE_APPROVAL_TIMEOUT_MS) {
+                    resolveFileApproval(pending.request.id, false, "approval_timeout")
+                }
                 if (
-                    expectedSessionHash != null &&
-                    controlAuthenticated &&
-                    lastHeartbeatAt > 0L &&
+                    expectedSessionHash != null && controlAuthenticated && lastHeartbeatAt > 0L &&
                     now - lastHeartbeatAt > WATCHDOG_TIMEOUT_MS
                 ) {
                     synchronized(lock) {
                         if (
-                            expectedSessionHash != null &&
-                            controlAuthenticated &&
+                            expectedSessionHash != null && controlAuthenticated &&
                             System.currentTimeMillis() - lastHeartbeatAt > WATCHDOG_TIMEOUT_MS
                         ) closePeerLocked()
                     }
@@ -178,6 +189,7 @@ class WebRtcHost(
             .put("fps", spec?.fps ?: 0).put("minBitrateBps", spec?.minBitrateBps ?: 0)
             .put("maxBitrateBps", spec?.maxBitrateBps ?: 0)
             .put("fileChannelReady", fileAuthenticated)
+            .put("fileApprovalPending", pendingFileApproval != null)
             .put("heartbeatAgeMs", heartbeatAge)
             .put("watchdogTimeoutMs", WATCHDOG_TIMEOUT_MS)
     }
@@ -185,6 +197,30 @@ class WebRtcHost(
     fun setCaptureProfile(sessionHash: String, profile: String): Boolean {
         if (!isCurrentSession(sessionHash)) return false
         return setCaptureProfileInternal(profile)
+    }
+
+    fun resolveFileApproval(id: String, approved: Boolean) {
+        resolveFileApproval(id, approved, if (approved) null else "approval_denied")
+    }
+
+    private fun resolveFileApproval(id: String, approved: Boolean, denialReason: String?) {
+        synchronized(lock) {
+            val pending = pendingFileApproval ?: return
+            if (pending.request.id != id) return
+            pendingFileApproval = null
+            if (!approved) {
+                sendJson(pending.channel, JSONObject().put("type", "file_error").put("id", id).put("error", denialReason ?: "approval_denied"))
+                return
+            }
+            if (!fileAuthenticated || pending.channel !== fileChannel || pending.channel.state() != DataChannel.State.OPEN) {
+                sendJson(pending.channel, JSONObject().put("type", "file_error").put("id", id).put("error", "session_closed"))
+                return
+            }
+            val request = pending.request
+            val error = fileReceiver.start(request.id, request.name, request.mime, request.size)
+            if (error == null) sendJson(pending.channel, JSONObject().put("type", "file_ready").put("id", id))
+            else sendJson(pending.channel, JSONObject().put("type", "file_error").put("id", id).put("error", error))
+        }
     }
 
     fun endSession(sessionHash: String) { synchronized(lock) { if (isCurrentSession(sessionHash)) closePeerLocked() } }
@@ -237,9 +273,10 @@ class WebRtcHost(
             applyOutputProfile()
             return
         }
-        // Keep MediaProjection capture dimensions stable for the whole permission session.
-        // Quality changes only adapt VideoSource output; this avoids VirtualDisplay churn
-        // and keeps the input coordinate system completely independent of stream quality.
+        // Keep one stable capture surface, but avoid capturing 1440p/60 for every
+        // profile. 1280/60 is enough for low-latency fluid mode and dramatically
+        // reduces scaling/encoder pressure on many phones. Touch coordinates remain
+        // based on the physical display, not these stream dimensions.
         val (baseWidth, baseHeight) = scaledSize(BASE_CAPTURE_MAX_EDGE)
         capturer.startCapture(baseWidth, baseHeight, BASE_CAPTURE_FPS)
         captureStarted = true
@@ -257,13 +294,11 @@ class WebRtcHost(
 
     private fun desiredCaptureSpec(): CaptureSpec {
         val settings = when (captureProfile) {
-            "economy" -> Triple(800, 20, 500_000 to 1_400_000)
-            "balanced" -> Triple(1280, 30, 1_000_000 to 3_200_000)
-            // Slightly lower than the old 1600/6 Mbps profile: several mobile
-            // encoders accumulated frames or produced visual instability there.
-            "high" -> Triple(1440, 30, 1_600_000 to 4_800_000)
-            "fluid" -> Triple(1080, 60, 1_400_000 to 4_500_000)
-            else -> Triple(1280, 30, 900_000 to 3_600_000)
+            "economy" -> Triple(720, 20, 400_000 to 1_100_000)
+            "balanced" -> Triple(1080, 30, 800_000 to 2_600_000)
+            "high" -> Triple(1280, 30, 1_200_000 to 3_800_000)
+            "fluid" -> Triple(1080, 60, 1_200_000 to 3_600_000)
+            else -> Triple(1080, 30, 700_000 to 2_800_000)
         }
         val (width, height) = scaledSize(settings.first)
         return CaptureSpec(width, height, settings.second, settings.third.first, settings.third.second)
@@ -275,10 +310,7 @@ class WebRtcHost(
         try {
             videoSource.adaptOutputFormat(wanted.width, wanted.height, wanted.fps)
             activeSpec = wanted
-        } catch (_: Exception) {
-            // Do not recreate the MediaProjection capture on profile failure.
-            // Keeping the last good format is safer than causing visible churn.
-        }
+        } catch (_: Exception) {}
     }
 
     private fun applySenderPolicy() {
@@ -291,7 +323,7 @@ class WebRtcHost(
                 encoding.minBitrateBps = spec.minBitrateBps
                 encoding.maxBitrateBps = spec.maxBitrateBps
                 encoding.maxFramerate = spec.fps
-                encoding.bitratePriority = if (captureProfile == "fluid") 2.2 else 2.0
+                encoding.bitratePriority = if (captureProfile == "fluid") 2.4 else 2.0
             }
             sender.parameters = params
         } catch (_: Exception) {}
@@ -309,15 +341,19 @@ class WebRtcHost(
         override fun onDataChannel(channel: DataChannel?) {
             channel ?: return
             when (channel.label()) {
+                "control" -> {
+                    controlChannel = channel
+                    controlAuthenticated = false
+                    channel.registerObserver(controlObserver(channel))
+                }
                 "file" -> {
                     fileChannel = channel
                     fileAuthenticated = false
                     channel.registerObserver(fileObserver(channel))
                 }
                 else -> {
-                    controlChannel = channel
-                    controlAuthenticated = false
-                    channel.registerObserver(controlObserver(channel))
+                    try { channel.close() } catch (_: Exception) {}
+                    try { channel.dispose() } catch (_: Exception) {}
                 }
             }
         }
@@ -329,6 +365,7 @@ class WebRtcHost(
             if (newState == PeerConnection.PeerConnectionState.FAILED || newState == PeerConnection.PeerConnectionState.CLOSED) {
                 controlAuthenticated = false
                 fileAuthenticated = false
+                pendingFileApproval = null
                 fileReceiver.cancel()
             }
         }
@@ -337,9 +374,7 @@ class WebRtcHost(
     private fun controlObserver(channel: DataChannel) = object : DataChannel.Observer {
         override fun onBufferedAmountChange(previousAmount: Long) = Unit
         override fun onStateChange() {
-            if (channel.state() == DataChannel.State.OPEN) {
-                sendJson(channel, JSONObject().put("type", "hello").put("authRequired", true))
-            }
+            if (channel.state() == DataChannel.State.OPEN) sendJson(channel, JSONObject().put("type", "hello").put("authRequired", true))
         }
         override fun onMessage(buffer: DataChannel.Buffer?) {
             if (buffer == null || buffer.binary || buffer.data.remaining() > MAX_CONTROL_MESSAGE_BYTES) return
@@ -352,12 +387,18 @@ class WebRtcHost(
         override fun onBufferedAmountChange(previousAmount: Long) = Unit
         override fun onStateChange() {
             if (channel.state() == DataChannel.State.OPEN) sendJson(channel, JSONObject().put("type", "hello").put("authRequired", true).put("maxFileBytes", IncomingFileReceiver.MAX_FILE_BYTES))
-            if (channel.state() == DataChannel.State.CLOSED) { fileAuthenticated = false; fileReceiver.cancel() }
+            if (channel.state() == DataChannel.State.CLOSED) {
+                fileAuthenticated = false
+                pendingFileApproval = null
+                fileReceiver.cancel()
+            }
         }
         override fun onMessage(buffer: DataChannel.Buffer?) {
             buffer ?: return
             if (buffer.binary) {
-                if (!fileAuthenticated || buffer.data.remaining() > IncomingFileReceiver.MAX_CHUNK_BYTES) return
+                // Binary payload is accepted only after Android approval created an
+                // active receiver. Unsolicited chunks are dropped fail-closed.
+                if (!fileAuthenticated || pendingFileApproval != null || fileReceiver.progress() == null || buffer.data.remaining() > IncomingFileReceiver.MAX_CHUNK_BYTES) return
                 val bytes = ByteArray(buffer.data.remaining()); buffer.data.get(bytes)
                 val error = fileReceiver.append(bytes)
                 if (error != null) {
@@ -376,9 +417,7 @@ class WebRtcHost(
         return supplied.length in 32..128 && expected != null && constantTimeEquals(expected, sha256Hex(supplied))
     }
 
-    private fun touchHeartbeat() {
-        lastHeartbeatAt = System.currentTimeMillis()
-    }
+    private fun touchHeartbeat() { lastHeartbeatAt = System.currentTimeMillis() }
 
     private fun handleControlMessage(channel: DataChannel, raw: String) {
         val obj = try { JSONObject(raw) } catch (_: Exception) { return }
@@ -417,13 +456,27 @@ class WebRtcHost(
             }
             "file_begin" -> {
                 if (!fileAuthenticated) return
-                val id = obj.optString("id")
-                val error = fileReceiver.start(id, obj.optString("name"), obj.optString("mime"), obj.optLong("size", -1L))
-                if (error == null) sendJson(channel, JSONObject().put("type", "file_ready").put("id", id))
-                else sendJson(channel, JSONObject().put("type", "file_error").put("id", id).put("error", error))
+                if (pendingFileApproval != null) {
+                    sendJson(channel, JSONObject().put("type", "file_error").put("id", obj.optString("id")).put("error", "approval_pending"))
+                    return
+                }
+                val request = FileApprovalRequest(
+                    id = obj.optString("id"),
+                    name = obj.optString("name"),
+                    mime = obj.optString("mime"),
+                    size = obj.optLong("size", -1L)
+                )
+                val error = fileReceiver.validateRequest(request.id, request.name, request.mime, request.size)
+                if (error != null) {
+                    sendJson(channel, JSONObject().put("type", "file_error").put("id", request.id).put("error", error))
+                    return
+                }
+                pendingFileApproval = PendingFileApproval(request, channel)
+                sendJson(channel, JSONObject().put("type", "file_pending").put("id", request.id).put("approvalRequired", true))
+                onFileApprovalRequested(request)
             }
             "file_end" -> {
-                if (!fileAuthenticated) return
+                if (!fileAuthenticated || pendingFileApproval != null) return
                 val id = obj.optString("id")
                 val result = fileReceiver.finish(id)
                 result.onSuccess { saved ->
@@ -432,7 +485,12 @@ class WebRtcHost(
                     fileReceiver.cancel(); sendJson(channel, JSONObject().put("type", "file_error").put("id", id).put("error", error.message ?: "save_failed"))
                 }
             }
-            "file_cancel" -> { fileReceiver.cancel(); sendJson(channel, JSONObject().put("type", "file_cancelled")) }
+            "file_cancel" -> {
+                val id = obj.optString("id")
+                if (pendingFileApproval?.request?.id == id) pendingFileApproval = null
+                fileReceiver.cancel()
+                sendJson(channel, JSONObject().put("type", "file_cancelled").put("id", id))
+            }
         }
     }
 
@@ -467,6 +525,7 @@ class WebRtcHost(
 
     private fun closePeerLocked() {
         RemoteAccessibilityService.instance?.cancelRemoteDrag(); fileReceiver.cancel()
+        pendingFileApproval = null
         controlAuthenticated = false; fileAuthenticated = false; lastCommandSeq = 0L; lastHeartbeatAt = 0L
         peerState = "closed"; iceState = "closed"; gatheringState = "complete"
         listOf(controlChannel, fileChannel).forEach { channel ->
@@ -497,10 +556,11 @@ class WebRtcHost(
 
     companion object {
         private const val MAX_CONTROL_MESSAGE_BYTES = 16 * 1024
-        private const val BASE_CAPTURE_MAX_EDGE = 1440
+        private const val BASE_CAPTURE_MAX_EDGE = 1280
         private const val BASE_CAPTURE_FPS = 60
-        private const val WATCHDOG_INTERVAL_MS = 10_000L
+        private const val WATCHDOG_INTERVAL_MS = 5_000L
         private const val WATCHDOG_TIMEOUT_MS = 30_000L
+        private const val FILE_APPROVAL_TIMEOUT_MS = 30_000L
         private val factoryInitialized = AtomicBoolean(false)
     }
 }
