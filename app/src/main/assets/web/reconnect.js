@@ -9,6 +9,7 @@
   let diagnosticTimer = null;
   let lastDiagnostic = null;
   let extraStatsTimer = null;
+  let previousVideoStats = null;
 
   const originalUpdateConnectionState = updateConnectionState;
   const originalPostBrowserCandidate = postBrowserCandidate;
@@ -92,15 +93,21 @@
     }
   };
 
+  function delta(current, previous) {
+    if (!Number.isFinite(current) || !Number.isFinite(previous)) return 0;
+    return Math.max(0, current - previous);
+  }
+
   startStats = function() {
     originalStartStats();
     const lossNode = ensureMetric('lossStat', 'Perda');
     const jitterNode = ensureMetric('jitterStat', 'Jitter');
-    const bufferNode = ensureMetric('bufferStat', 'Buffer');
-    const decodeNode = ensureMetric('decodeStat', 'Decode');
-    const processNode = ensureMetric('processStat', 'Processo');
-    const dropNode = ensureMetric('dropStat', 'Drops');
+    const bufferNode = ensureMetric('bufferStat', 'Buffer agora');
+    const decodeNode = ensureMetric('decodeStat', 'Decode agora');
+    const processNode = ensureMetric('processStat', 'Processo agora');
+    const dropNode = ensureMetric('dropStat', 'Drops agora');
 
+    previousVideoStats = null;
     clearInterval(extraStatsTimer);
     extraStatsTimer = setInterval(async () => {
       if (!pc) return;
@@ -110,33 +117,60 @@
         stats.forEach(report => { if (report.type === 'inbound-rtp' && report.kind === 'video') inbound = report; });
         if (!inbound) return;
 
-        const received = Number(inbound.packetsReceived || 0);
-        const lost = Number(inbound.packetsLost || 0);
-        const total = received + Math.max(0, lost);
-        lossNode.textContent = total > 0 ? `${((Math.max(0, lost) / total) * 100).toFixed(1)}%` : '0%';
+        const current = {
+          packetsReceived: Number(inbound.packetsReceived || 0),
+          packetsLost: Math.max(0, Number(inbound.packetsLost || 0)),
+          emitted: Number(inbound.jitterBufferEmittedCount || 0),
+          jitterDelay: Number(inbound.jitterBufferDelay || 0),
+          decoded: Number(inbound.framesDecoded || 0),
+          decodeTime: Number(inbound.totalDecodeTime || 0),
+          processingDelay: Number(inbound.totalProcessingDelay || 0),
+          dropped: Number(inbound.framesDropped || 0),
+          receivedFrames: Number(inbound.framesReceived || 0)
+        };
+
         jitterNode.textContent = Number.isFinite(inbound.jitter) ? `${Math.round(inbound.jitter * 1000)} ms` : '—';
 
-        const emitted = Number(inbound.jitterBufferEmittedCount || 0);
-        const jitterDelay = Number(inbound.jitterBufferDelay || 0);
-        bufferNode.textContent = emitted > 0 ? `${Math.round((jitterDelay / emitted) * 1000)} ms` : '—';
+        if (previousVideoStats) {
+          const dReceived = delta(current.packetsReceived, previousVideoStats.packetsReceived);
+          const dLost = delta(current.packetsLost, previousVideoStats.packetsLost);
+          const packetWindow = dReceived + dLost;
+          lossNode.textContent = packetWindow > 0 ? `${((dLost / packetWindow) * 100).toFixed(1)}%` : '0.0%';
 
-        const decoded = Number(inbound.framesDecoded || 0);
-        const decodeTime = Number(inbound.totalDecodeTime || 0);
-        decodeNode.textContent = decoded > 0 ? `${Math.round((decodeTime / decoded) * 1000)} ms` : '—';
+          const dEmitted = delta(current.emitted, previousVideoStats.emitted);
+          const dJitterDelay = delta(current.jitterDelay, previousVideoStats.jitterDelay);
+          bufferNode.textContent = dEmitted > 0 ? `${Math.round((dJitterDelay / dEmitted) * 1000)} ms` : '—';
 
-        const processingDelay = Number(inbound.totalProcessingDelay || 0);
-        processNode.textContent = decoded > 0 && processingDelay > 0 ? `${Math.round((processingDelay / decoded) * 1000)} ms` : '—';
+          const dDecoded = delta(current.decoded, previousVideoStats.decoded);
+          const dDecodeTime = delta(current.decodeTime, previousVideoStats.decodeTime);
+          decodeNode.textContent = dDecoded > 0 ? `${Math.round((dDecodeTime / dDecoded) * 1000)} ms` : '—';
 
-        const dropped = Number(inbound.framesDropped || 0);
-        const receivedFrames = Number(inbound.framesReceived || 0);
-        dropNode.textContent = receivedFrames > 0 ? `${((dropped / Math.max(1, receivedFrames)) * 100).toFixed(1)}%` : `${dropped}`;
+          const dProcessing = delta(current.processingDelay, previousVideoStats.processingDelay);
+          processNode.textContent = dDecoded > 0 ? `${Math.round((dProcessing / dDecoded) * 1000)} ms` : '—';
+
+          const dDropped = delta(current.dropped, previousVideoStats.dropped);
+          const dReceivedFrames = delta(current.receivedFrames, previousVideoStats.receivedFrames);
+          dropNode.textContent = dReceivedFrames > 0 ? `${((dDropped / Math.max(1, dReceivedFrames)) * 100).toFixed(1)}%` : `${Math.round(dDropped)}`;
+        } else {
+          lossNode.textContent = '—';
+          bufferNode.textContent = '—';
+          decodeNode.textContent = '—';
+          processNode.textContent = '—';
+          dropNode.textContent = '—';
+        }
+
+        previousVideoStats = current;
       } catch {}
     }, 1200);
   };
 
   function ensureMetric(id, label) {
     let node = document.getElementById(id);
-    if (node) return node;
+    if (node) {
+      const labelNode = node.previousElementSibling;
+      if (labelNode) labelNode.textContent = label;
+      return node;
+    }
     const grid = document.querySelector('.quick-stats');
     const item = document.createElement('div');
     item.innerHTML = `<span>${label}</span><strong id="${id}">—</strong>`;
@@ -150,6 +184,7 @@
 
   const originalStartWebRtc = startWebRtc;
   startWebRtc = async function() {
+    previousVideoStats = null;
     const result = await originalStartWebRtc();
     startDiagnostics();
     return result;
