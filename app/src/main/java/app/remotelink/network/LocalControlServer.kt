@@ -480,6 +480,6 @@ class LocalControlServer(
         private const val PENDING_TTL_MS = 90_000L
         private const val SOCKET_READ_TIMEOUT_MS = 2_500
         private const val REQUEST_DEADLINE_MS = 6_000L
-        private const val MAX_CONNECTIONS_PER_IP = 4
+        private const val MAX_CONNECTIONS_PER_IP = 8
     }
 }
