@@ -36,6 +36,9 @@ object LanPolicy {
     private fun wifiBindingFor(cm: ConnectivityManager, network: Network): WifiBinding? {
         val caps = cm.getNetworkCapabilities(network) ?: return null
         if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return null
+        // Be explicit: a vendor/VPN implementation must never make a tunnel eligible simply
+        // because it also reports an underlying Wi-Fi transport.
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return null
         val props = cm.getLinkProperties(network) ?: return null
         val link = props.linkAddresses.firstOrNull {
             it.address is Inet4Address &&
