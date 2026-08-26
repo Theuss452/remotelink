@@ -19,10 +19,11 @@ import java.util.concurrent.TimeUnit
 /**
  * Full-display MediaProjection capturer used by RemoteLink.
  *
- * Rotation geometry has exactly one authority: MediaProjection.onCapturedContentResize().
- * WebRtcHost is deliberately not allowed to resize the VirtualDisplay after capture starts.
- * This avoids the race where Android briefly produced the correct full landscape frame and a
- * delayed changeCaptureFormat() then stretched/cropped it back to the old geometry.
+ * MediaProjection.onCapturedContentResize() is the preferred geometry authority because it
+ * describes the content Android is actually projecting. WebRtcHost may also request the current
+ * physical display geometry through changeCaptureFormat() as an idempotent repair fallback for
+ * devices/OEMs that delay or miss a resize callback. Both paths converge on the same resize
+ * routine, so the SurfaceTexture and VirtualDisplay can never intentionally diverge.
  */
 class ScreenCapturerAndroid(
     private val permissionData: Intent,
@@ -45,8 +46,11 @@ class ScreenCapturerAndroid(
     private val internalProjectionCallback = object : MediaProjection.Callback() {
         override fun onCapturedContentResize(width: Int, height: Int) {
             if (disposed || !capturing || width <= 1 || height <= 1) return
-            resizeFromProjection(width, height)
-            clientProjectionCallback.onCapturedContentResize(this@ScreenCapturerAndroid.width, this@ScreenCapturerAndroid.height)
+            resizeCaptureSurface(width, height)
+            clientProjectionCallback.onCapturedContentResize(
+                this@ScreenCapturerAndroid.width,
+                this@ScreenCapturerAndroid.height
+            )
         }
 
         override fun onStop() {
@@ -115,14 +119,18 @@ class ScreenCapturerAndroid(
     }
 
     /**
-     * Intentionally ignored after startCapture(). The WebRTC VideoCapturer API exposes this
-     * method, but for MediaProjection Android itself is the reliable source of rotated content
-     * dimensions. Encoder downscaling is handled separately by VideoSource.adaptOutputFormat().
+     * Repair path used by WebRtcHost after a display-change notification. This must not resize
+     * the encoder profile; it only makes the MediaProjection surface match the real display.
+     * resizeCaptureSurface() is idempotent, so a late duplicate callback is harmless.
      */
-    override fun changeCaptureFormat(width: Int, height: Int, framerate: Int) = Unit
+    @Synchronized
+    override fun changeCaptureFormat(width: Int, height: Int, framerate: Int) {
+        if (disposed || !capturing || width <= 1 || height <= 1) return
+        resizeCaptureSurface(width, height)
+    }
 
     @Synchronized
-    private fun resizeFromProjection(requestedWidth: Int, requestedHeight: Int) {
+    private fun resizeCaptureSurface(requestedWidth: Int, requestedHeight: Int) {
         val newWidth = even(requestedWidth)
         val newHeight = even(requestedHeight)
         if (newWidth <= 1 || newHeight <= 1) return
@@ -131,9 +139,11 @@ class ScreenCapturerAndroid(
         val helper = textureHelper ?: return
         runOnCaptureThread(helper) {
             if (disposed || !capturing) return@runOnCaptureThread
+            if (newWidth == width && newHeight == height) return@runOnCaptureThread
 
-            // Update the consumer buffer before the producer. Both dimensions then represent
-            // exactly the content size Android reported; there is no independent display guess.
+            // Resize the consumer buffer first, then its producer. Keeping these dimensions
+            // identical prevents Android from centering a landscape image inside a portrait
+            // VirtualDisplay (the small-screen-in-the-middle symptom seen after rotation).
             helper.setTextureSize(newWidth, newHeight)
             virtualDisplay?.resize(newWidth, newHeight, densityDpi)
 
