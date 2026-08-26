@@ -123,13 +123,11 @@ class ScreenCapturerAndroid(
      * the encoder profile; it only makes the MediaProjection surface match the real display.
      * resizeCaptureSurface() is idempotent, so a late duplicate callback is harmless.
      */
-    @Synchronized
     override fun changeCaptureFormat(width: Int, height: Int, framerate: Int) {
         if (disposed || !capturing || width <= 1 || height <= 1) return
         resizeCaptureSurface(width, height)
     }
 
-    @Synchronized
     private fun resizeCaptureSurface(requestedWidth: Int, requestedHeight: Int) {
         val newWidth = even(requestedWidth)
         val newHeight = even(requestedHeight)
@@ -141,9 +139,10 @@ class ScreenCapturerAndroid(
             if (disposed || !capturing) return@runOnCaptureThread
             if (newWidth == width && newHeight == height) return@runOnCaptureThread
 
-            // Resize the consumer buffer first, then its producer. Keeping these dimensions
-            // identical prevents Android from centering a landscape image inside a portrait
-            // VirtualDisplay (the small-screen-in-the-middle symptom seen after rotation).
+            // All effective geometry mutation happens on the capture thread. This avoids a
+            // lock inversion if an OEM resize callback arrives while WebRtcHost requests repair.
+            // Resize the consumer buffer first, then its producer so Android never has to center
+            // a landscape image inside a portrait VirtualDisplay.
             helper.setTextureSize(newWidth, newHeight)
             virtualDisplay?.resize(newWidth, newHeight, densityDpi)
 
