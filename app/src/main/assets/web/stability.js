@@ -5,6 +5,7 @@
   let repairAttempts = 0;
   let lastStableOrientation = 'unknown';
   let latencyTuningTimer = null;
+  let geometryConsistencyTimer = null;
   let lastPacketsReceived = 0;
   let lastPacketsLost = 0;
   let lastEmitted = 0;
@@ -44,9 +45,8 @@
     const vw = Number(el.video.videoWidth || 0);
     const vh = Number(el.video.videoHeight || 0);
 
-    // Android may already be landscape while the encoded WebRTC canvas remains portrait.
-    // In that state the full landscape screen is letterboxed inside the portrait frame.
-    // Cropping that canvas with cover removes only the black top/bottom bars.
+    // This is only a temporary visual fallback. The Android side now actively repairs the
+    // MediaProjection surface when an OEM leaves a portrait WebRTC canvas after rotation.
     frameCanvasMismatch = landscape && vw > 0 && vh > 0 && vw < vh;
 
     el.stage.classList.toggle('remote-landscape', landscape);
@@ -130,8 +130,7 @@
       return;
     }
 
-    // Keep the viewer usable immediately through frame-letterbox-fix. Geometry repair is
-    // still requested in the background in case the encoder later switches its canvas too.
+    // Keep the viewer usable immediately while asking Android to repair the real capture surface.
     const now = Date.now();
     if (now - lastGeometryRepairAt < 1000 || repairAttempts >= 3) return;
     lastGeometryRepairAt = now;
@@ -251,17 +250,27 @@
   startStats = function() {
     originalStartStats();
     clearInterval(latencyTuningTimer);
+    clearInterval(geometryConsistencyTimer);
     latencyTuningTimer = setInterval(retuneLatencyFromStats, 1500);
     retuneLatencyFromStats();
 
-    const consistencyTimer = setInterval(() => {
-      if (!pc) {
-        clearInterval(consistencyTimer);
-        return;
-      }
+    geometryConsistencyTimer = setInterval(() => {
+      if (!pc) return;
       checkOrientationConsistency();
       applyViewerGeometry();
     }, 800);
+  };
+
+  // startWebRtc() can replace the peer during an automatic reconnect before an old local timer
+  // observes pc === null. Explicit cleanup prevents one geometry/latency watchdog per reconnect
+  // from accumulating and repeatedly issuing repair/profile commands.
+  const originalClosePeerOnly = closePeerOnly;
+  closePeerOnly = function(...args) {
+    clearInterval(latencyTuningTimer);
+    clearInterval(geometryConsistencyTimer);
+    latencyTuningTimer = null;
+    geometryConsistencyTimer = null;
+    return originalClosePeerOnly(...args);
   };
 
   window.addEventListener('resize', applyViewerGeometry);
