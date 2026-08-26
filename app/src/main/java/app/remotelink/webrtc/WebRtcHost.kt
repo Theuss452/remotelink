@@ -85,6 +85,8 @@ class WebRtcHost(
     @Volatile private var captureProfile = "auto"
     @Volatile private var autoTier = "balanced"
     @Volatile private var customCapture = CustomCaptureConfig(1280, 30, 4_800_000)
+    @Volatile private var captureSurfaceMode = "auto"
+    @Volatile private var customSurfaceMaxEdge = 2400
     @Volatile private var activeSpec: CaptureSpec? = null
     @Volatile private var peerState = "new"
     @Volatile private var iceState = "new"
@@ -267,6 +269,9 @@ class WebRtcHost(
             .put("displayHeight", display.y)
             .put("captureContentWidth", capturer.currentWidth())
             .put("captureContentHeight", capturer.currentHeight())
+            .put("captureDensityDpi", capturer.currentDensityDpi())
+            .put("captureSurfaceMode", captureSurfaceMode)
+            .put("customSurfaceMaxEdge", customSurfaceMaxEdge)
             .put("orientation", orientationLabel(display))
             .put("baseCaptureWidth", baseCaptureWidth)
             .put("baseCaptureHeight", baseCaptureHeight)
@@ -395,6 +400,24 @@ class WebRtcHost(
         return even(width) to even(height)
     }
 
+    private fun captureSurfaceSize(display: Point): Point {
+        if (captureSurfaceMode != "custom") return Point(even(display.x), even(display.y))
+
+        val sourceLong = maxOf(display.x, display.y).coerceAtLeast(2)
+        val requested = customSurfaceMaxEdge.coerceIn(SURFACE_MIN_EDGE, SURFACE_MAX_EDGE)
+        // Permit up to 2x supersampling so a device that exposes 1200x540 logical metrics can be
+        // explicitly tested at 2400x1080. Preventing unbounded upscaling protects memory/encoder.
+        val scale = (requested.toDouble() / sourceLong.toDouble()).coerceIn(0.5, 2.0)
+        val width = even((display.x * scale).toInt()).coerceAtLeast(2)
+        val height = even((display.y * scale).toInt()).coerceAtLeast(2)
+        val pixels = width.toLong() * height.toLong()
+        if (pixels > SURFACE_MAX_PIXELS) {
+            val shrink = kotlin.math.sqrt(SURFACE_MAX_PIXELS.toDouble() / pixels.toDouble())
+            return Point(even((width * shrink).toInt()), even((height * shrink).toInt()))
+        }
+        return Point(width, height)
+    }
+
     private fun orientationLabel(size: Point): String = if (size.x > size.y) "landscape" else "portrait"
 
     private fun ensureCaptureStartedLocked() {
@@ -405,8 +428,9 @@ class WebRtcHost(
             return
         }
         val display = physicalDisplaySize()
-        val baseWidth = even(display.x)
-        val baseHeight = even(display.y)
+        val surface = captureSurfaceSize(display)
+        val baseWidth = surface.x
+        val baseHeight = surface.y
         capturer.startCapture(baseWidth, baseHeight, BASE_CAPTURE_FPS)
         baseCaptureWidth = baseWidth
         baseCaptureHeight = baseHeight
@@ -432,13 +456,15 @@ class WebRtcHost(
     private fun refreshCaptureGeometryAsync() {
         if (disposed || !captureStarted) return
         val display = physicalDisplaySize()
+        val surface = captureSurfaceSize(display)
         val forced = forceGeometryRefresh
-        val changed = forced || display.x != lastDisplayWidth || display.y != lastDisplayHeight
+        val changed = forced || display.x != lastDisplayWidth || display.y != lastDisplayHeight ||
+            surface.x != baseCaptureWidth || surface.y != baseCaptureHeight
         if (!changed) return
         forceGeometryRefresh = false
 
-        val wantedBaseWidth = even(display.x)
-        val wantedBaseHeight = even(display.y)
+        val wantedBaseWidth = surface.x
+        val wantedBaseHeight = surface.y
         captureGeometryExecutor.execute {
             if (disposed || !captureStarted) return@execute
             try {
@@ -458,6 +484,15 @@ class WebRtcHost(
                 Log.w(TAG, "Falha ao adaptar captura à geometria ${display.x}x${display.y}", e)
             }
         }
+    }
+
+    private fun setCaptureSurfaceInternal(mode: String, maxEdge: Int): Boolean {
+        val normalized = mode.lowercase().takeIf { it == "auto" || it == "custom" } ?: return false
+        if (normalized == "custom" && maxEdge !in SURFACE_MIN_EDGE..SURFACE_MAX_EDGE) return false
+        captureSurfaceMode = normalized
+        if (normalized == "custom") customSurfaceMaxEdge = even(maxEdge)
+        requestGeometryRepair()
+        return true
     }
 
     private fun setCaptureProfileInternal(profile: String): Boolean {
@@ -572,6 +607,8 @@ class WebRtcHost(
         sendJson(target, JSONObject().put("type", "display_geometry")
             .put("displayWidth", display.x).put("displayHeight", display.y)
             .put("captureContentWidth", capturer.currentWidth()).put("captureContentHeight", capturer.currentHeight())
+            .put("captureDensityDpi", capturer.currentDensityDpi())
+            .put("captureSurfaceMode", captureSurfaceMode).put("customSurfaceMaxEdge", customSurfaceMaxEdge)
             .put("orientation", orientationLabel(display)).put("streamWidth", spec?.width ?: 0).put("streamHeight", spec?.height ?: 0)
             .put("streamFps", spec?.fps ?: 0).put("profile", captureProfile).put("autoTier", autoTier).put("revision", displayRevision))
     }
@@ -671,6 +708,11 @@ class WebRtcHost(
             "input_text" -> if (SessionCapabilities.canKeyboard()) RemoteAccessibilityService.instance?.inputText(obj.optString("text").take(MAX_TEXT_LENGTH))
             "key" -> if (SessionCapabilities.canKeyboard()) RemoteAccessibilityService.instance?.sendKey(obj.optString("key"), obj.optBoolean("ctrl", false), obj.optBoolean("shift", false), obj.optBoolean("alt", false))
             "capture_geometry_refresh" -> { requestGeometryRepair(); sendJson(channel, JSONObject().put("type", "capture_geometry_refresh_result").put("ok", true)) }
+            "capture_surface" -> {
+                val ok = setCaptureSurfaceInternal(obj.optString("mode"), obj.optInt("maxEdge", customSurfaceMaxEdge))
+                sendJson(channel, JSONObject().put("type", "capture_surface_result").put("ok", ok)
+                    .put("mode", captureSurfaceMode).put("maxEdge", customSurfaceMaxEdge))
+            }
             "capture_profile" -> {
                 val ok = setCaptureProfileInternal(obj.optString("profile"))
                 sendJson(channel, JSONObject().put("type", "capture_profile_result").put("ok", ok).put("profile", captureProfile).put("autoTier", autoTier))
@@ -817,6 +859,9 @@ class WebRtcHost(
         private const val CUSTOM_MAX_FPS = 60
         private const val CUSTOM_MIN_BITRATE_BPS = 600_000
         private const val CUSTOM_MAX_BITRATE_BPS = 20_000_000
+        private const val SURFACE_MIN_EDGE = 480
+        private const val SURFACE_MAX_EDGE = 4096
+        private const val SURFACE_MAX_PIXELS = 12_600_000L
         private val factoryInitialized = AtomicBoolean(false)
     }
 }
