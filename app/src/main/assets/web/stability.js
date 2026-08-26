@@ -13,16 +13,67 @@
   let badQualityWindows = 0;
   let goodQualityWindows = 0;
   let lastProfileChangeAt = 0;
+  let frameCanvasMismatch = false;
 
   preferHardwareFriendlyVideoCodec = function() {};
 
-  function enforcePureContain() {
-    el.stage.classList.remove('orientation-fallback');
-    for (const prop of ['left','top','right','bottom','inset','width','height','max-width','max-height','transform']) {
-      el.video.style.removeProperty(prop);
-    }
-    enforceAutoFit();
+  function physicalOrientation() {
+    if (lastStableOrientation !== 'unknown') return lastStableOrientation;
+    if (remoteGeometry?.orientation && remoteGeometry.orientation !== 'unknown') return remoteGeometry.orientation;
+    const vw = Number(el.video.videoWidth || 0), vh = Number(el.video.videoHeight || 0);
+    return vw && vh ? (vw > vh ? 'landscape' : 'portrait') : 'unknown';
   }
+
+  function setAspectClass() {
+    el.stage.classList.remove('aspect-20-9','aspect-19-5-9','aspect-16-9','aspect-4-3');
+    if (physicalOrientation() !== 'landscape') return;
+    const w = Number(remoteGeometry?.displayWidth || 0);
+    const h = Number(remoteGeometry?.displayHeight || 0);
+    const ratio = w > 0 && h > 0 ? Math.max(w,h) / Math.min(w,h) : 20 / 9;
+    if (ratio >= 2.19) el.stage.classList.add('aspect-20-9');
+    else if (ratio >= 2.05) el.stage.classList.add('aspect-19-5-9');
+    else if (ratio >= 1.65) el.stage.classList.add('aspect-16-9');
+    else el.stage.classList.add('aspect-4-3');
+  }
+
+  function applyViewerGeometry() {
+    enforceAutoFit();
+    const orientation = physicalOrientation();
+    const landscape = orientation === 'landscape';
+    const portrait = orientation === 'portrait';
+    const vw = Number(el.video.videoWidth || 0);
+    const vh = Number(el.video.videoHeight || 0);
+
+    // Android may already be landscape while the encoded WebRTC canvas remains portrait.
+    // In that state the full landscape screen is letterboxed inside the portrait frame.
+    // Cropping that canvas with cover removes only the black top/bottom bars.
+    frameCanvasMismatch = landscape && vw > 0 && vh > 0 && vw < vh;
+
+    el.stage.classList.toggle('remote-landscape', landscape);
+    el.stage.classList.toggle('remote-portrait', portrait);
+    el.stage.classList.toggle('frame-letterbox-fix', frameCanvasMismatch);
+    document.documentElement.classList.toggle('remote-landscape', landscape);
+    document.documentElement.classList.toggle('remote-portrait', portrait);
+    document.documentElement.classList.toggle('frame-letterbox-fix', frameCanvasMismatch);
+    setAspectClass();
+  }
+
+  const originalUpdateViewerGeometry = updateViewerGeometry;
+  updateViewerGeometry = function(force = false) {
+    originalUpdateViewerGeometry(force);
+    applyViewerGeometry();
+  };
+
+  const originalNormalizedPoint = normalizedPoint;
+  normalizedPoint = function(clientX, clientY) {
+    if (!frameCanvasMismatch) return originalNormalizedPoint(clientX, clientY);
+    const rect = el.stage.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const x = (clientX - rect.left) / rect.width;
+    const y = (clientY - rect.top) / rect.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+    return {x, y};
+  };
 
   function applyReceiverTarget(targetMs) {
     if (!pc) return;
@@ -56,7 +107,7 @@
     const sourceH = Number(data?.captureContentHeight || data?.displayHeight || 0);
     const expected = data?.orientation || (sourceW && sourceH ? (sourceW > sourceH ? 'landscape' : 'portrait') : 'unknown');
     if (expected !== 'unknown') lastStableOrientation = expected;
-    enforcePureContain();
+    applyViewerGeometry();
     scheduleOrientationConsistencyCheck();
   };
 
@@ -72,18 +123,20 @@
     const vh = Number(el.video.videoHeight || 0);
     if (!vw || !vh || lastStableOrientation === 'unknown') return;
 
+    applyViewerGeometry();
     const actual = vw > vh ? 'landscape' : 'portrait';
     if (actual === lastStableOrientation) {
       repairAttempts = 0;
       return;
     }
 
+    // Keep the viewer usable immediately through frame-letterbox-fix. Geometry repair is
+    // still requested in the background in case the encoder later switches its canvas too.
     const now = Date.now();
     if (now - lastGeometryRepairAt < 1000 || repairAttempts >= 3) return;
     lastGeometryRepairAt = now;
     repairAttempts += 1;
     sendControl({ type:'capture_geometry_refresh' });
-    setMessage('Sincronizando a geometria real da tela…');
   }
 
   function requestProfile(profile, reason) {
@@ -118,14 +171,14 @@
           if (channelAuthenticated && control?.readyState === 'open') {
             sendControl({ type:'capture_profile', profile:'balanced' });
             applyReceiverTarget(80);
-            enforcePureContain();
+            applyViewerGeometry();
           }
         }, 80);
         scheduleOrientationConsistencyCheck();
       }
 
       if (data?.type === 'display_geometry') {
-        enforcePureContain();
+        applyViewerGeometry();
         scheduleOrientationConsistencyCheck();
       }
     };
@@ -207,10 +260,10 @@
         return;
       }
       checkOrientationConsistency();
-      enforcePureContain();
-    }, 1000);
+      applyViewerGeometry();
+    }, 800);
   };
 
-  window.addEventListener('resize', enforcePureContain);
-  document.addEventListener('fullscreenchange', enforcePureContain);
+  window.addEventListener('resize', applyViewerGeometry);
+  document.addEventListener('fullscreenchange', () => requestAnimationFrame(applyViewerGeometry));
 })();
