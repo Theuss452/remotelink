@@ -4,6 +4,8 @@
   let lastGeometryRepairAt = 0;
   let repairAttempts = 0;
   let lastStableOrientation = 'unknown';
+  let physicalDisplayWidth = 0;
+  let physicalDisplayHeight = 0;
   let latencyTuningTimer = null;
   let geometryConsistencyTimer = null;
   let lastPacketsReceived = 0;
@@ -25,8 +27,8 @@
 
   function setExactAspectRatio() {
     const orientation = physicalOrientation();
-    const w = Number(remoteGeometry?.displayWidth || 0);
-    const h = Number(remoteGeometry?.displayHeight || 0);
+    const w = physicalDisplayWidth || Number(remoteGeometry?.displayWidth || 0);
+    const h = physicalDisplayHeight || Number(remoteGeometry?.displayHeight || 0);
     el.stage.classList.remove('aspect-20-9','aspect-19-5-9','aspect-16-9','aspect-4-3');
     if (orientation === 'landscape' && w > 1 && h > 1) {
       el.stage.style.aspectRatio = `${w} / ${h}`;
@@ -99,9 +101,13 @@
 
   const originalApplyRemoteGeometry = applyRemoteGeometry;
   applyRemoteGeometry = function(data) {
-    originalApplyRemoteGeometry(data);
     const sourceW = Number(data?.displayWidth || 0);
     const sourceH = Number(data?.displayHeight || 0);
+    if (sourceW > 1 && sourceH > 1) {
+      physicalDisplayWidth = sourceW;
+      physicalDisplayHeight = sourceH;
+    }
+    originalApplyRemoteGeometry(data);
     const expected = data?.orientation || (sourceW && sourceH ? (sourceW > sourceH ? 'landscape' : 'portrait') : 'unknown');
     if (expected !== 'unknown') lastStableOrientation = expected;
     if (data?.autoTier) {
