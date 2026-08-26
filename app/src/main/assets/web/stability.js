@@ -16,7 +16,6 @@
   let badQualityWindows = 0;
   let goodQualityWindows = 0;
   let lastTierChangeAt = 0;
-  let frameCanvasMismatch = false;
 
   function physicalOrientation() {
     if (lastStableOrientation !== 'unknown') return lastStableOrientation;
@@ -38,22 +37,19 @@
   }
 
   function applyViewerGeometry() {
+    // Viewer policy is absolute: the entire decoded frame must always remain visible.
+    // Geometry mismatches are repaired on Android; the browser never hides them with crop/zoom.
     enforceAutoFit();
     const orientation = physicalOrientation();
     const landscape = orientation === 'landscape';
     const portrait = orientation === 'portrait';
-    const vw = Number(el.video.videoWidth || 0);
-    const vh = Number(el.video.videoHeight || 0);
-
-    // Temporary visual fallback only. Android is asked to repair the real capture surface.
-    frameCanvasMismatch = landscape && vw > 0 && vh > 0 && vw < vh;
 
     el.stage.classList.toggle('remote-landscape', landscape);
     el.stage.classList.toggle('remote-portrait', portrait);
-    el.stage.classList.toggle('frame-letterbox-fix', frameCanvasMismatch);
+    el.stage.classList.remove('frame-letterbox-fix');
     document.documentElement.classList.toggle('remote-landscape', landscape);
     document.documentElement.classList.toggle('remote-portrait', portrait);
-    document.documentElement.classList.toggle('frame-letterbox-fix', frameCanvasMismatch);
+    document.documentElement.classList.remove('frame-letterbox-fix');
     setExactAspectRatio();
   }
 
@@ -61,17 +57,6 @@
   updateViewerGeometry = function(force = false) {
     originalUpdateViewerGeometry(force);
     applyViewerGeometry();
-  };
-
-  const originalNormalizedPoint = normalizedPoint;
-  normalizedPoint = function(clientX, clientY) {
-    if (!frameCanvasMismatch) return originalNormalizedPoint(clientX, clientY);
-    const rect = el.stage.getBoundingClientRect();
-    if (!rect.width || !rect.height) return null;
-    const x = (clientX - rect.left) / rect.width;
-    const y = (clientY - rect.top) / rect.height;
-    if (x < 0 || x > 1 || y < 0 || y > 1) return null;
-    return {x, y};
   };
 
   function applyReceiverTarget(targetMs) {
