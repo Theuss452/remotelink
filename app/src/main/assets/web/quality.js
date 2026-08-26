@@ -210,3 +210,24 @@
 
   renderNetwork();
 })();
+
+// Hard viewer guard: no profile, rotation fallback or stale CSS class is allowed to crop the
+// remote frame. Inline !important wins over the legacy frame-letterbox-fix stylesheet rule.
+(() => {
+  const originalEnforceAutoFit = enforceAutoFit;
+  enforceAutoFit = function() {
+    originalEnforceAutoFit();
+    const video = el?.video;
+    if (!video) return;
+    video.style.setProperty('object-fit', 'contain', 'important');
+    video.style.setProperty('object-position', '50% 50%', 'important');
+    video.style.setProperty('width', '100%', 'important');
+    video.style.setProperty('height', '100%', 'important');
+    video.style.setProperty('max-width', '100%', 'important');
+    video.style.setProperty('max-height', '100%', 'important');
+    video.style.setProperty('transform', 'none', 'important');
+    el.stage?.classList.remove('frame-letterbox-fix');
+    document.documentElement.classList.remove('frame-letterbox-fix');
+  };
+  enforceAutoFit();
+})();
