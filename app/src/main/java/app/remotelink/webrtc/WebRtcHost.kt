@@ -47,6 +47,12 @@ class WebRtcHost(
         val maxBitrateBps: Int
     )
 
+    private data class CustomCaptureConfig(
+        val maxEdge: Int,
+        val fps: Int,
+        val maxBitrateBps: Int
+    )
+
     private val lock = Any()
     private val eglBase = EglBase.create()
     private val factory: PeerConnectionFactory
@@ -65,15 +71,20 @@ class WebRtcHost(
     @Volatile private var peer: PeerConnection? = null
     @Volatile private var videoSender: RtpSender? = null
     @Volatile private var controlChannel: DataChannel? = null
+    @Volatile private var motionChannel: DataChannel? = null
     @Volatile private var fileChannel: DataChannel? = null
     @Volatile private var expectedSessionHash: String? = null
     @Volatile private var controlAuthenticated = false
+    @Volatile private var motionAuthenticated = false
     @Volatile private var fileAuthenticated = false
     @Volatile private var lastCommandSeq = 0L
+    @Volatile private var lastMotionSeq = 0L
     @Volatile private var lastHeartbeatAt = 0L
     @Volatile private var captureStarted = false
     @Volatile private var disposed = false
-    @Volatile private var captureProfile = "balanced"
+    @Volatile private var captureProfile = "auto"
+    @Volatile private var autoTier = "balanced"
+    @Volatile private var customCapture = CustomCaptureConfig(1280, 30, 4_800_000)
     @Volatile private var activeSpec: CaptureSpec? = null
     @Volatile private var peerState = "new"
     @Volatile private var iceState = "new"
@@ -149,8 +160,8 @@ class WebRtcHost(
             object : MediaProjection.Callback() {
                 override fun onCapturedContentResize(width: Int, height: Int) {
                     if (width <= 1 || height <= 1) return
-                    // Full-display capture uses the actual rotated display as geometry authority.
-                    // OEM callbacks can arrive late or briefly report the previous orientation.
+                    // MediaProjection is preferred, while DisplayManager verifies/repairs OEMs
+                    // that delay or miss a rotation resize callback.
                     forceGeometryRefresh = true
                     scheduleGeometryRefresh(0L)
                 }
@@ -187,8 +198,10 @@ class WebRtcHost(
             ensureCaptureStartedLocked()
             expectedSessionHash = sessionHash
             controlAuthenticated = false
+            motionAuthenticated = false
             fileAuthenticated = false
             lastCommandSeq = 0L
+            lastMotionSeq = 0L
             lastHeartbeatAt = 0L
             localCandidates.clear()
             localCandidateCount = 0
@@ -244,6 +257,7 @@ class WebRtcHost(
         val spec = activeSpec
         val display = physicalDisplaySize()
         val caps = SessionCapabilities.snapshot()
+        val custom = customCapture
         val heartbeatAge = if (lastHeartbeatAt > 0L) System.currentTimeMillis() - lastHeartbeatAt else -1L
         return JSONObject()
             .put("peer", peerState)
@@ -252,6 +266,7 @@ class WebRtcHost(
             .put("localCandidates", localCandidateCount)
             .put("captureStarted", captureStarted)
             .put("profile", captureProfile)
+            .put("autoTier", autoTier)
             .put("width", spec?.width ?: 0)
             .put("height", spec?.height ?: 0)
             .put("fps", spec?.fps ?: 0)
@@ -259,14 +274,19 @@ class WebRtcHost(
             .put("maxBitrateBps", spec?.maxBitrateBps ?: 0)
             .put("displayWidth", display.x)
             .put("displayHeight", display.y)
-            .put("captureContentWidth", display.x)
-            .put("captureContentHeight", display.y)
+            // Report the real MediaProjection surface, not an assumption based on display size.
+            .put("captureContentWidth", capturer.currentWidth())
+            .put("captureContentHeight", capturer.currentHeight())
             .put("orientation", orientationLabel(display))
             .put("baseCaptureWidth", baseCaptureWidth)
             .put("baseCaptureHeight", baseCaptureHeight)
             .put("displayRevision", displayRevision)
+            .put("motionChannelReady", motionAuthenticated)
             .put("fileChannelReady", fileAuthenticated)
             .put("fileApprovalPending", pendingFileApproval != null)
+            .put("customMaxEdge", custom.maxEdge)
+            .put("customFps", custom.fps)
+            .put("customMaxBitrateBps", custom.maxBitrateBps)
             .put("capScreen", caps.screen)
             .put("capTouch", caps.touch)
             .put("capKeyboard", caps.keyboard)
@@ -372,8 +392,6 @@ class WebRtcHost(
             @Suppress("DEPRECATION")
             val rotation = display.rotation
             val rotatedLandscape = rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_270
-            // Some OEMs report real metrics in natural orientation briefly during rotation.
-            // Normalize the pair to the display's actual rotation.
             if (rotatedLandscape && width < height) {
                 val tmp = width; width = height; height = tmp
             } else if (!rotatedLandscape && width > height && rotation == Surface.ROTATION_0) {
@@ -411,8 +429,6 @@ class WebRtcHost(
         val display = physicalDisplaySize()
         val baseWidth = even(display.x)
         val baseHeight = even(display.y)
-        // Keep the VirtualDisplay at the real full-screen geometry. Downscaling belongs to
-        // VideoSource/encoder, not to MediaProjection; mixing the two caused crop/zoom on rotate.
         capturer.startCapture(baseWidth, baseHeight, BASE_CAPTURE_FPS)
         baseCaptureWidth = baseWidth
         baseCaptureHeight = baseHeight
@@ -468,11 +484,36 @@ class WebRtcHost(
 
     private fun setCaptureProfileInternal(profile: String): Boolean {
         val normalized = profile.lowercase().takeIf {
-            it in setOf("auto", "economy", "balanced", "high", "fluid")
+            it in setOf("auto", "economy", "balanced", "high", "fluid", "fluid60", "custom")
         } ?: return false
         captureProfile = normalized
+        if (normalized == "auto") autoTier = "balanced"
         applyOutputProfile()
         applySenderPolicy()
+        sendDisplayGeometry()
+        return true
+    }
+
+    private fun setAutoTierInternal(tier: String): Boolean {
+        if (captureProfile != "auto") return false
+        val normalized = tier.lowercase().takeIf { it in setOf("economy", "balanced", "fluid") } ?: return false
+        if (autoTier == normalized) return true
+        autoTier = normalized
+        applyOutputProfile()
+        applySenderPolicy()
+        sendDisplayGeometry()
+        return true
+    }
+
+    private fun setCustomCaptureInternal(maxEdge: Int, fps: Int, maxBitrateBps: Int): Boolean {
+        if (maxEdge !in CUSTOM_MIN_EDGE..CUSTOM_MAX_EDGE) return false
+        if (fps !in CUSTOM_MIN_FPS..CUSTOM_MAX_FPS) return false
+        if (maxBitrateBps !in CUSTOM_MIN_BITRATE_BPS..CUSTOM_MAX_BITRATE_BPS) return false
+        customCapture = CustomCaptureConfig(even(maxEdge), fps, maxBitrateBps)
+        captureProfile = "custom"
+        applyOutputProfile()
+        applySenderPolicy()
+        sendDisplayGeometry()
         return true
     }
 
@@ -480,9 +521,20 @@ class WebRtcHost(
         val landscape = source.x > source.y
         val settings = when (captureProfile) {
             "economy" -> Triple(if (landscape) 960 else 720, 24, 250_000 to 1_800_000)
-            "high" -> Triple(1440, 30, 700_000 to 7_500_000)
-            "fluid" -> Triple(if (landscape) 1280 else 1080, 30, 500_000 to 6_500_000)
-            "auto", "balanced" -> Triple(if (landscape) 1280 else 1080, 30, 400_000 to 4_800_000)
+            "high" -> Triple(1600, 30, 750_000 to 8_000_000)
+            "fluid" -> Triple(if (landscape) 1280 else 1080, 45, 500_000 to 6_500_000)
+            "fluid60" -> Triple(if (landscape) 1280 else 1080, 60, 700_000 to 8_500_000)
+            "custom" -> {
+                val c = customCapture
+                val min = (c.maxBitrateBps / 8).coerceIn(250_000, 1_500_000)
+                Triple(c.maxEdge, c.fps, min to c.maxBitrateBps)
+            }
+            "auto" -> when (autoTier) {
+                "economy" -> Triple(if (landscape) 960 else 720, 24, 250_000 to 1_800_000)
+                "fluid" -> Triple(if (landscape) 1280 else 1080, 60, 650_000 to 8_000_000)
+                else -> Triple(if (landscape) 1280 else 1080, 30, 400_000 to 4_800_000)
+            }
+            "balanced" -> Triple(if (landscape) 1280 else 1080, 30, 400_000 to 4_800_000)
             else -> Triple(if (landscape) 1280 else 1080, 30, 400_000 to 4_800_000)
         }
         val (width, height) = scaledSizeFor(source, settings.first)
@@ -505,13 +557,20 @@ class WebRtcHost(
         val spec = activeSpec ?: return
         try {
             val params = sender.parameters
-            params.degradationPreference = RtpParameters.DegradationPreference.BALANCED
+            val favorFps = captureProfile == "fluid60" || captureProfile == "fluid" ||
+                (captureProfile == "auto" && autoTier == "fluid") ||
+                (captureProfile == "custom" && spec.fps >= 50)
+            params.degradationPreference = if (favorFps) {
+                RtpParameters.DegradationPreference.MAINTAIN_FRAMERATE
+            } else {
+                RtpParameters.DegradationPreference.BALANCED
+            }
             params.encodings.forEach { encoding ->
                 encoding.minBitrateBps = spec.minBitrateBps
                 encoding.maxBitrateBps = spec.maxBitrateBps
                 encoding.maxFramerate = spec.fps
                 encoding.scaleResolutionDownBy = 1.0
-                encoding.bitratePriority = if (captureProfile == "fluid") 2.0 else 1.5
+                encoding.bitratePriority = if (favorFps) 2.0 else 1.5
                 encoding.networkPriority = Priority.HIGH
             }
             sender.parameters = params
@@ -546,11 +605,14 @@ class WebRtcHost(
                 .put("type", "display_geometry")
                 .put("displayWidth", display.x)
                 .put("displayHeight", display.y)
-                .put("captureContentWidth", display.x)
-                .put("captureContentHeight", display.y)
+                .put("captureContentWidth", capturer.currentWidth())
+                .put("captureContentHeight", capturer.currentHeight())
                 .put("orientation", orientationLabel(display))
                 .put("streamWidth", spec?.width ?: 0)
                 .put("streamHeight", spec?.height ?: 0)
+                .put("streamFps", spec?.fps ?: 0)
+                .put("profile", captureProfile)
+                .put("autoTier", autoTier)
                 .put("revision", displayRevision)
         )
     }
@@ -580,6 +642,12 @@ class WebRtcHost(
                     controlAuthenticated = false
                     channel.registerObserver(controlObserver(channel))
                 }
+                "motion" -> {
+                    motionChannel = channel
+                    motionAuthenticated = false
+                    lastMotionSeq = 0L
+                    channel.registerObserver(motionObserver(channel))
+                }
                 "file" -> {
                     fileChannel = channel
                     fileAuthenticated = false
@@ -604,6 +672,7 @@ class WebRtcHost(
             }
             if (newState == PeerConnection.PeerConnectionState.FAILED || newState == PeerConnection.PeerConnectionState.CLOSED) {
                 controlAuthenticated = false
+                motionAuthenticated = false
                 fileAuthenticated = false
                 pendingFileApproval = null
                 fileReceiver.cancel()
@@ -623,6 +692,45 @@ class WebRtcHost(
             val bytes = ByteArray(buffer.data.remaining())
             buffer.data.get(bytes)
             handleControlMessage(channel, bytes.toString(StandardCharsets.UTF_8))
+        }
+    }
+
+    /**
+     * High-frequency pointer movement has no value once a newer point exists. The browser uses
+     * an unordered, zero-retransmit DataChannel for drag_move only. Every important boundary
+     * command (drag_start/end/cancel, click, keyboard, navigation) stays on the reliable control
+     * channel. If this channel is unavailable the browser falls back to control automatically.
+     */
+    private fun motionObserver(channel: DataChannel) = object : DataChannel.Observer {
+        override fun onBufferedAmountChange(previousAmount: Long) = Unit
+        override fun onStateChange() {
+            if (channel.state() == DataChannel.State.OPEN) {
+                sendJson(channel, JSONObject().put("type", "hello").put("authRequired", true).put("motion", true))
+            }
+            if (channel.state() == DataChannel.State.CLOSED) motionAuthenticated = false
+        }
+        override fun onMessage(buffer: DataChannel.Buffer?) {
+            if (buffer == null || buffer.binary || buffer.data.remaining() > MAX_MOTION_MESSAGE_BYTES) return
+            val bytes = ByteArray(buffer.data.remaining())
+            buffer.data.get(bytes)
+            val obj = try { JSONObject(bytes.toString(StandardCharsets.UTF_8)) } catch (_: Exception) { return }
+            if (obj.optString("type") == "auth") {
+                val ok = authenticate(obj.optString("token"))
+                motionAuthenticated = ok
+                lastMotionSeq = 0L
+                sendJson(channel, JSONObject().put("type", if (ok) "auth_ok" else "auth_failed").put("motion", true))
+                if (!ok) channel.close()
+                return
+            }
+            if (!motionAuthenticated || obj.optString("type") != "drag_move") return
+            if (!SessionCapabilities.canTouch()) return
+            val seq = obj.optLong("seq", -1L)
+            if (seq <= 0L || seq <= lastMotionSeq) return
+            lastMotionSeq = seq
+            touchHeartbeat()
+            RemoteAccessibilityService.instance?.dragMoveNormalized(
+                obj.optDouble("x").toFloat(), obj.optDouble("y").toFloat()
+            )
         }
     }
 
@@ -711,7 +819,31 @@ class WebRtcHost(
                         val ok = setCaptureProfileInternal(obj.optString("profile"))
                         sendJson(
                             channel,
-                            JSONObject().put("type", "capture_profile_result").put("ok", ok).put("profile", captureProfile)
+                            JSONObject().put("type", "capture_profile_result").put("ok", ok)
+                                .put("profile", captureProfile).put("autoTier", autoTier)
+                        )
+                    }
+                    "capture_auto_tier" -> {
+                        val ok = setAutoTierInternal(obj.optString("tier"))
+                        sendJson(
+                            channel,
+                            JSONObject().put("type", "capture_auto_tier_result").put("ok", ok)
+                                .put("profile", captureProfile).put("autoTier", autoTier)
+                        )
+                    }
+                    "capture_custom" -> {
+                        val ok = setCustomCaptureInternal(
+                            obj.optInt("maxEdge", -1),
+                            obj.optInt("fps", -1),
+                            obj.optInt("maxBitrateBps", -1)
+                        )
+                        val c = customCapture
+                        sendJson(
+                            channel,
+                            JSONObject().put("type", "capture_custom_result").put("ok", ok)
+                                .put("profile", captureProfile)
+                                .put("maxEdge", c.maxEdge).put("fps", c.fps)
+                                .put("maxBitrateBps", c.maxBitrateBps)
                         )
                     }
                     "capture_geometry_refresh" -> {
@@ -863,18 +995,21 @@ class WebRtcHost(
         fileReceiver.cancel()
         pendingFileApproval = null
         controlAuthenticated = false
+        motionAuthenticated = false
         fileAuthenticated = false
         lastCommandSeq = 0L
+        lastMotionSeq = 0L
         lastHeartbeatAt = 0L
         peerState = "closed"
         iceState = "closed"
         gatheringState = "complete"
-        listOf(controlChannel, fileChannel).forEach { channel ->
+        listOf(controlChannel, motionChannel, fileChannel).forEach { channel ->
             try { channel?.unregisterObserver() } catch (_: Exception) {}
             try { channel?.close() } catch (_: Exception) {}
             try { channel?.dispose() } catch (_: Exception) {}
         }
         controlChannel = null
+        motionChannel = null
         fileChannel = null
         videoSender = null
         try { peer?.close() } catch (_: Exception) {}
@@ -937,12 +1072,19 @@ class WebRtcHost(
     companion object {
         private const val TAG = "RemoteLinkWebRtc"
         private const val MAX_CONTROL_MESSAGE_BYTES = 16 * 1024
-        private const val BASE_CAPTURE_FPS = 30
+        private const val MAX_MOTION_MESSAGE_BYTES = 2 * 1024
+        private const val BASE_CAPTURE_FPS = 60
         private const val DISPLAY_CHANGE_DEBOUNCE_MS = 80L
         private const val ROTATION_VERIFY_DELAY_MS = 420L
         private const val WATCHDOG_INTERVAL_MS = 5_000L
         private const val WATCHDOG_TIMEOUT_MS = 30_000L
         private const val FILE_APPROVAL_TIMEOUT_MS = 30_000L
+        private const val CUSTOM_MIN_EDGE = 480
+        private const val CUSTOM_MAX_EDGE = 2560
+        private const val CUSTOM_MIN_FPS = 15
+        private const val CUSTOM_MAX_FPS = 60
+        private const val CUSTOM_MIN_BITRATE_BPS = 600_000
+        private const val CUSTOM_MAX_BITRATE_BPS = 20_000_000
 
         private val TOUCH_ACTIONS = setOf(
             "tap", "swipe", "drag_start", "drag_move", "drag_end", "drag_cancel",
