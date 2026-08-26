@@ -129,7 +129,7 @@
   }
 
   function prettyTier(tier) {
-    return ({economy:'economia',balanced:'balanceado',fluid:'60 FPS'})[tier] || tier;
+    return ({economy:'economia', balanced:'30 FPS', fluid:'45 FPS'})[tier] || tier;
   }
 
   function renderLive(temporaryText = '') {
@@ -154,7 +154,17 @@
       network.textContent = 'Aguardando telemetria da conexão…';
       return;
     }
-    network.textContent = `Jitter ${n.jitterMs.toFixed(0)} ms • perda ${n.lossPct.toFixed(2)}% • buffer ${n.bufferMs.toFixed(0)} ms`;
+    const details = [
+      `FPS ${Number(n.fps || 0).toFixed(0)}`,
+      `drop ${Number(n.dropPct || 0).toFixed(1)}%`,
+      `decode ${Number(n.decodeMs || 0).toFixed(1)} ms`,
+      `jitter ${Number(n.jitterMs || 0).toFixed(0)} ms`,
+      `perda ${Number(n.lossPct || 0).toFixed(2)}%`,
+      `buffer ${Number(n.bufferMs || 0).toFixed(0)} ms`,
+      `alvo ${Number(n.targetMs || 0).toFixed(0)} ms`
+    ];
+    if ((n.pli || 0) > 0 || (n.nack || 0) > 0) details.push(`NACK/PLI ${n.nack || 0}/${n.pli || 0}`);
+    network.textContent = details.join(' • ');
   }
 
   const originalBindControlChannel = bindControlChannel;
@@ -166,21 +176,18 @@
       try { data = JSON.parse(ev.data); } catch {}
       previousMessage?.call(channel, ev);
 
-      if (data?.type === 'auth_ok') {
-        setTimeout(() => applyDesiredQuality(false), 120);
-      }
+      if (data?.type === 'auth_ok') setTimeout(() => applyDesiredQuality(false), 120);
       if (data?.type === 'capture_profile_result' && data.ok) {
         serverProfile = data.profile || settings.mode;
-        serverAutoTier = data.autoTier || serverAutoTier;
+        if (settings.mode === 'auto' && ['economy','balanced','fluid'].includes(serverProfile)) serverAutoTier = serverProfile;
+        else serverAutoTier = data.autoTier || serverAutoTier;
         renderLive();
       }
       if (data?.type === 'capture_custom_result') {
         if (data.ok) {
           serverProfile = 'custom';
           renderLive();
-        } else {
-          renderLive('Configuração personalizada recusada pelos limites de segurança.');
-        }
+        } else renderLive('Configuração personalizada recusada pelos limites de segurança.');
       }
       if (data?.type === 'capture_auto_tier_result' && data.ok) {
         serverProfile = data.profile || 'auto';
@@ -189,7 +196,8 @@
       }
       if (data?.type === 'display_geometry') {
         serverProfile = data.profile || serverProfile;
-        serverAutoTier = data.autoTier || serverAutoTier;
+        if (settings.mode === 'auto' && ['economy','balanced','fluid'].includes(serverProfile)) serverAutoTier = serverProfile;
+        else serverAutoTier = data.autoTier || serverAutoTier;
         renderLive();
       }
     };
