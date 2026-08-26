@@ -23,12 +23,13 @@ import kotlin.math.roundToInt
  *
  * Important rules:
  * 1. Encoder/downscale resolution is independent from this VirtualDisplay surface.
- * 2. A portrait <-> landscape change recreates VirtualDisplay instead of relying on resize().
- *    Several OEM implementations keep a stale viewport/transform after resize(), producing the
- *    classic "zoomed / only half of the screen" symptom.
+ * 2. A configuration/rotation change updates the existing VirtualDisplay with resize() and a
+ *    freshly attached Surface. Android 14+ allows one createVirtualDisplay() call per projection
+ *    session, and the documented resize + new Surface flow also clears stale buffer geometry that
+ *    can otherwise look like a zoomed/half-screen capture on some devices.
  * 3. If Android exposes a uniformly scaled geometry (for example 2400x1080 -> 1200x540), density
- *    is scaled by the same factor so the logical viewport remains the same size instead of making
- *    Android UI elements twice as large.
+ *    is scaled by the same factor so the logical viewport stays constant instead of making UI
+ *    elements twice as large.
  */
 class ScreenCapturerAndroid(
     private val permissionData: Intent,
@@ -55,9 +56,8 @@ class ScreenCapturerAndroid(
         override fun onCapturedContentResize(width: Int, height: Int) {
             if (disposed || !capturing || width <= 1 || height <= 1) return
 
-            // Treat this only as a signal. Some devices report the encoded/scaled content size
-            // here rather than the native display size. WebRtcHost verifies current geometry and
-            // calls changeCaptureFormat() with the selected capture-surface geometry.
+            // Treat callback dimensions as a change signal. WebRtcHost decides whether Auto or a
+            // user-selected custom surface size should be applied, then calls changeCaptureFormat.
             clientProjectionCallback.onCapturedContentResize(width, height)
         }
 
@@ -65,8 +65,7 @@ class ScreenCapturerAndroid(
             val wasCapturing = capturing
             capturing = false
             releaseVirtualDisplay()
-            try { surface?.release() } catch (_: Exception) {}
-            surface = null
+            releaseSurface()
             mediaProjection = null
             if (wasCapturing) capturerObserver?.onCapturerStopped()
             clientProjectionCallback.onStop()
@@ -112,7 +111,16 @@ class ScreenCapturerAndroid(
 
         val outputSurface = Surface(helper.surfaceTexture)
         surface = outputSurface
-        virtualDisplay = createVirtualDisplay(projection, outputSurface, this.width, this.height, densityDpi, helper)
+        virtualDisplay = projection.createVirtualDisplay(
+            "RemoteLink_FullDisplay",
+            this.width,
+            this.height,
+            densityDpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            outputSurface,
+            null,
+            helper.handler
+        ) ?: error("Não foi possível criar VirtualDisplay")
 
         capturing = true
         observer.onCapturerStarted(true)
@@ -139,28 +147,21 @@ class ScreenCapturerAndroid(
             if (disposed || !capturing) return@runOnCaptureThread
             if (newWidth == width && newHeight == height) return@runOnCaptureThread
 
-            val oldLandscape = width > height
-            val newLandscape = newWidth > newHeight
-            val orientationChanged = oldLandscape != newLandscape
+            val display = virtualDisplay ?: return@runOnCaptureThread
             val newDensity = densityForGeometry(newWidth, newHeight)
 
-            // Consumer buffer first so a newly created producer never writes a landscape frame
-            // into the old portrait-sized SurfaceTexture (or vice versa).
-            helper.setTextureSize(newWidth, newHeight)
+            // Android's supported configuration-change flow is resize() + a Surface whose buffer
+            // size matches the new geometry. Reusing only the old Surface is what can leave an OEM
+            // compositor with portrait viewport state after switching to landscape.
+            try { display.setSurface(null) } catch (_: Exception) {}
+            releaseSurface()
 
-            if (orientationChanged) {
-                // resize() is not reliable across orientation changes on every Android/OEM. A
-                // fresh VirtualDisplay resets viewport, transform and projection geometry.
-                recreateVirtualDisplay(newWidth, newHeight, newDensity, helper)
-            } else {
-                try {
-                    virtualDisplay?.resize(newWidth, newHeight, newDensity)
-                } catch (_: Exception) {
-                    // Same-orientation resize can still fail on vendor implementations; recreate
-                    // rather than leaving capture in a half-updated state.
-                    recreateVirtualDisplay(newWidth, newHeight, newDensity, helper)
-                }
-            }
+            helper.setTextureSize(newWidth, newHeight)
+            display.resize(newWidth, newHeight, newDensity)
+
+            val newSurface = Surface(helper.surfaceTexture)
+            surface = newSurface
+            display.setSurface(newSurface)
 
             width = newWidth
             height = newHeight
@@ -176,9 +177,8 @@ class ScreenCapturerAndroid(
         val longScale = maxOf(newWidth, newHeight).toDouble() / refLong.toDouble()
         val shortScale = minOf(newWidth, newHeight).toDouble() / refShort.toDouble()
 
-        // Only compensate density for an approximately uniform resolution scale. If aspect ratio
-        // itself changed materially, preserving the original density is safer and avoids hiding a
-        // real geometry problem behind an arbitrary DPI change.
+        // Only compensate DPI for an approximately uniform resolution scale. Rotation itself has
+        // scale ~= 1 because long/short edges are compared independently of orientation.
         val uniform = abs(longScale - shortScale) <= 0.08
         if (!uniform) return baseDensityDpi
 
@@ -186,42 +186,15 @@ class ScreenCapturerAndroid(
         return (baseDensityDpi * scale).roundToInt().coerceIn(MIN_DENSITY_DPI, MAX_DENSITY_DPI)
     }
 
-    private fun recreateVirtualDisplay(
-        newWidth: Int,
-        newHeight: Int,
-        newDensity: Int,
-        helper: SurfaceTextureHelper
-    ) {
-        val projection = mediaProjection ?: return
-        val outputSurface = surface ?: return
-        releaseVirtualDisplay()
-        virtualDisplay = createVirtualDisplay(projection, outputSurface, newWidth, newHeight, newDensity, helper)
-    }
-
-    private fun createVirtualDisplay(
-        projection: MediaProjection,
-        outputSurface: Surface,
-        width: Int,
-        height: Int,
-        density: Int,
-        helper: SurfaceTextureHelper
-    ): VirtualDisplay {
-        return projection.createVirtualDisplay(
-            "RemoteLink_FullDisplay",
-            width,
-            height,
-            density,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            outputSurface,
-            null,
-            helper.handler
-        ) ?: error("Não foi possível criar VirtualDisplay")
-    }
-
     private fun releaseVirtualDisplay() {
         try { virtualDisplay?.setSurface(null) } catch (_: Exception) {}
         try { virtualDisplay?.release() } catch (_: Exception) {}
         virtualDisplay = null
+    }
+
+    private fun releaseSurface() {
+        try { surface?.release() } catch (_: Exception) {}
+        surface = null
     }
 
     fun currentWidth(): Int = width
@@ -241,8 +214,7 @@ class ScreenCapturerAndroid(
             capturing = false
             try { helper.stopListening() } catch (_: Exception) {}
             releaseVirtualDisplay()
-            try { surface?.release() } catch (_: Exception) {}
-            surface = null
+            releaseSurface()
 
             val projection = mediaProjection
             mediaProjection = null
