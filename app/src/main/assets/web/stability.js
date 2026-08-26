@@ -13,10 +13,16 @@
   let badQualityWindows = 0;
   let goodQualityWindows = 0;
   let lastProfileChangeAt = 0;
-  let visualRotation = 0;
-  let correctedDisplayRect = null;
 
   preferHardwareFriendlyVideoCodec = function() {};
+
+  function enforcePureContain() {
+    el.stage.classList.remove('orientation-fallback');
+    for (const prop of ['left','top','right','bottom','inset','width','height','max-width','max-height','transform']) {
+      el.video.style.removeProperty(prop);
+    }
+    enforceAutoFit();
+  }
 
   function applyReceiverTarget(targetMs) {
     if (!pc) return;
@@ -43,98 +49,6 @@
     return receiver;
   };
 
-  function resetVideoCorrection() {
-    if (!visualRotation && !correctedDisplayRect) return;
-    visualRotation = 0;
-    correctedDisplayRect = null;
-    el.stage.classList.remove('orientation-fallback');
-    for (const prop of ['left','top','right','bottom','inset','width','height','max-width','max-height','transform']) {
-      el.video.style.removeProperty(prop);
-    }
-    // Reapply the normal no-crop layout from app.js.
-    enforceAutoFit();
-  }
-
-  function applyVisualOrientationCorrection() {
-    const vw = Number(el.video.videoWidth || 0);
-    const vh = Number(el.video.videoHeight || 0);
-    const stageW = Number(el.stage.clientWidth || 0);
-    const stageH = Number(el.stage.clientHeight || 0);
-    if (!vw || !vh || !stageW || !stageH || lastStableOrientation === 'unknown') {
-      resetVideoCorrection();
-      return;
-    }
-
-    const actual = vw > vh ? 'landscape' : 'portrait';
-    if (actual === lastStableOrientation) {
-      resetVideoCorrection();
-      return;
-    }
-
-    // The Android projection can briefly (or on some OEMs permanently) expose a
-    // portrait-shaped WebRTC frame while the physical screen is landscape. Instead
-    // of zooming/cropping it, rotate the COMPLETE frame locally and fit the rotated
-    // bounding box inside the existing viewer.
-    const rotation = lastStableOrientation === 'landscape' && actual === 'portrait'
-      ? 90
-      : lastStableOrientation === 'portrait' && actual === 'landscape'
-        ? -90
-        : 0;
-    if (!rotation) {
-      resetVideoCorrection();
-      return;
-    }
-
-    const rotatedSourceW = vh;
-    const rotatedSourceH = vw;
-    const scale = Math.min(stageW / rotatedSourceW, stageH / rotatedSourceH);
-    const preRotateW = Math.max(1, vw * scale);
-    const preRotateH = Math.max(1, vh * scale);
-    const visibleW = Math.max(1, rotatedSourceW * scale);
-    const visibleH = Math.max(1, rotatedSourceH * scale);
-
-    visualRotation = rotation;
-    el.stage.classList.add('orientation-fallback');
-    el.video.style.setProperty('inset', 'auto', 'important');
-    el.video.style.setProperty('left', '50%', 'important');
-    el.video.style.setProperty('top', '50%', 'important');
-    el.video.style.setProperty('right', 'auto', 'important');
-    el.video.style.setProperty('bottom', 'auto', 'important');
-    el.video.style.setProperty('width', `${preRotateW}px`, 'important');
-    el.video.style.setProperty('height', `${preRotateH}px`, 'important');
-    el.video.style.setProperty('max-width', 'none', 'important');
-    el.video.style.setProperty('max-height', 'none', 'important');
-    el.video.style.setProperty('object-fit', 'contain', 'important');
-    el.video.style.setProperty('object-position', '50% 50%', 'important');
-    el.video.style.setProperty('transform', `translate(-50%, -50%) rotate(${rotation}deg)`, 'important');
-
-    const stageRect = el.stage.getBoundingClientRect();
-    correctedDisplayRect = {
-      left: stageRect.left + (stageW - visibleW) / 2,
-      top: stageRect.top + (stageH - visibleH) / 2,
-      width: visibleW,
-      height: visibleH
-    };
-  }
-
-  const originalNormalizedPoint = normalizedPoint;
-  normalizedPoint = function(clientX, clientY) {
-    if (!visualRotation || !correctedDisplayRect) return originalNormalizedPoint(clientX, clientY);
-    const r = correctedDisplayRect;
-    const x = (clientX - r.left) / r.width;
-    const y = (clientY - r.top) / r.height;
-    if (x < 0 || x > 1 || y < 0 || y > 1) return null;
-    // The corrected image is displayed in the physical Android orientation, so the
-    // normalized point is already the coordinate expected by AccessibilityService.
-    return { x, y };
-  };
-
-  const originalUpdateViewerGeometry = updateViewerGeometry;
-  updateViewerGeometry = function(force = false) {
-    originalUpdateViewerGeometry(force);
-    requestAnimationFrame(applyVisualOrientationCorrection);
-  };
-
   const originalApplyRemoteGeometry = applyRemoteGeometry;
   applyRemoteGeometry = function(data) {
     originalApplyRemoteGeometry(data);
@@ -142,14 +56,14 @@
     const sourceH = Number(data?.captureContentHeight || data?.displayHeight || 0);
     const expected = data?.orientation || (sourceW && sourceH ? (sourceW > sourceH ? 'landscape' : 'portrait') : 'unknown');
     if (expected !== 'unknown') lastStableOrientation = expected;
-    requestAnimationFrame(applyVisualOrientationCorrection);
+    enforcePureContain();
     scheduleOrientationConsistencyCheck();
   };
 
   function scheduleOrientationConsistencyCheck() {
-    setTimeout(checkOrientationConsistency, 100);
-    setTimeout(checkOrientationConsistency, 500);
-    setTimeout(checkOrientationConsistency, 1000);
+    setTimeout(checkOrientationConsistency, 150);
+    setTimeout(checkOrientationConsistency, 700);
+    setTimeout(checkOrientationConsistency, 1300);
   }
 
   function checkOrientationConsistency() {
@@ -161,19 +75,15 @@
     const actual = vw > vh ? 'landscape' : 'portrait';
     if (actual === lastStableOrientation) {
       repairAttempts = 0;
-      resetVideoCorrection();
       return;
     }
 
-    // Keep the UI usable immediately, even if a device ignores changeCaptureFormat().
-    applyVisualOrientationCorrection();
-
     const now = Date.now();
-    if (now - lastGeometryRepairAt < 700 || repairAttempts >= 6) return;
+    if (now - lastGeometryRepairAt < 1000 || repairAttempts >= 3) return;
     lastGeometryRepairAt = now;
     repairAttempts += 1;
     sendControl({ type:'capture_geometry_refresh' });
-    setMessage('Ajustando rotação sem recortar a tela…');
+    setMessage('Sincronizando a geometria real da tela…');
   }
 
   function requestProfile(profile, reason) {
@@ -208,14 +118,14 @@
           if (channelAuthenticated && control?.readyState === 'open') {
             sendControl({ type:'capture_profile', profile:'balanced' });
             applyReceiverTarget(80);
-            applyVisualOrientationCorrection();
+            enforcePureContain();
           }
         }, 80);
         scheduleOrientationConsistencyCheck();
       }
 
       if (data?.type === 'display_geometry') {
-        requestAnimationFrame(applyVisualOrientationCorrection);
+        enforcePureContain();
         scheduleOrientationConsistencyCheck();
       }
     };
@@ -297,12 +207,10 @@
         return;
       }
       checkOrientationConsistency();
-      applyVisualOrientationCorrection();
-    }, 800);
+      enforcePureContain();
+    }, 1000);
   };
 
-  try {
-    new ResizeObserver(() => requestAnimationFrame(applyVisualOrientationCorrection)).observe(el.stage);
-  } catch {}
-  document.addEventListener('fullscreenchange', () => requestAnimationFrame(applyVisualOrientationCorrection));
+  window.addEventListener('resize', enforcePureContain);
+  document.addEventListener('fullscreenchange', enforcePureContain);
 })();
