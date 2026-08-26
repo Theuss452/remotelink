@@ -230,10 +230,13 @@
       return;
     }
     const display = `${Number(g.displayWidth || 0)}×${Number(g.displayHeight || 0)}`;
+    const reportedW = Number(g.reportedCaptureWidth || 0);
+    const reportedH = Number(g.reportedCaptureHeight || 0);
+    const reported = reportedW > 0 && reportedH > 0 ? `${reportedW}×${reportedH}` : '—';
     const surface = `${Number(g.captureContentWidth || 0)}×${Number(g.captureContentHeight || 0)}`;
     const stream = `${Number(g.streamWidth || 0)}×${Number(g.streamHeight || 0)}`;
     const density = Number(g.captureDensityDpi || 0);
-    surfaceDetail.textContent = `Android ${display} • superfície ${surface}${density ? ` @ ${density} dpi` : ''} • vídeo ${stream}`;
+    surfaceDetail.textContent = `Android ${display} • reportado ${reported} • superfície ${surface}${density ? ` @ ${density} dpi` : ''} • vídeo ${stream}`;
   }
 
   function renderNetwork() {
