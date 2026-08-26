@@ -20,6 +20,7 @@ import java.security.SecureRandom
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -61,6 +62,7 @@ class LocalControlServer(
     private val slots = Semaphore(12)
     private val pending = ConcurrentHashMap<String, Pending>()
     private val sessions = ConcurrentHashMap<String, Session>()
+    private val activeConnectionsByIp = ConcurrentHashMap<String, AtomicInteger>()
     private var serverSocket: ServerSocket? = null
     private var acceptThread: Thread? = null
 
@@ -89,6 +91,7 @@ class LocalControlServer(
         try { serverSocket?.close() } catch (_: Exception) {}
         pending.clear()
         sessions.clear()
+        activeConnectionsByIp.clear()
         pairingManager.invalidate()
         ScreenCaptureService.instance?.stopAll()
         workers.shutdownNow()
@@ -113,28 +116,60 @@ class LocalControlServer(
                 try { client.close() } catch (_: Exception) {}
                 continue
             }
+
+            val remoteIp = client.inetAddress.hostAddress ?: "unknown"
+            if (!acquireClientIp(remoteIp)) {
+                try { respondJson(client, 429, JSONObject().put("error", "too_many_connections")) }
+                catch (_: Exception) {}
+                finally { try { client.close() } catch (_: Exception) {} }
+                continue
+            }
+
             if (!slots.tryAcquire()) {
+                releaseClientIp(remoteIp)
                 try { respondJson(client, 503, JSONObject().put("error", "busy")) }
                 finally { try { client.close() } catch (_: Exception) {} }
                 continue
             }
-            workers.execute {
-                try { handle(client) }
-                catch (_: Exception) {
-                    try { respondJson(client, 400, JSONObject().put("error", "bad_request")) }
-                    catch (_: Exception) {}
-                } finally {
-                    slots.release()
-                    try { client.close() } catch (_: Exception) {}
+
+            try {
+                workers.execute {
+                    try { handle(client) }
+                    catch (_: Exception) {
+                        try { respondJson(client, 400, JSONObject().put("error", "bad_request")) }
+                        catch (_: Exception) {}
+                    } finally {
+                        slots.release()
+                        releaseClientIp(remoteIp)
+                        try { client.close() } catch (_: Exception) {}
+                    }
                 }
+            } catch (_: RejectedExecutionException) {
+                slots.release()
+                releaseClientIp(remoteIp)
+                try { client.close() } catch (_: Exception) {}
             }
         }
     }
 
+    private fun acquireClientIp(ip: String): Boolean {
+        val counter = activeConnectionsByIp.computeIfAbsent(ip) { AtomicInteger(0) }
+        val count = counter.incrementAndGet()
+        if (count <= MAX_CONNECTIONS_PER_IP) return true
+        releaseClientIp(ip)
+        return false
+    }
+
+    private fun releaseClientIp(ip: String) {
+        val counter = activeConnectionsByIp[ip] ?: return
+        if (counter.decrementAndGet() <= 0) activeConnectionsByIp.remove(ip, counter)
+    }
+
     private fun handle(socket: Socket) {
-        socket.soTimeout = 8000
+        socket.soTimeout = SOCKET_READ_TIMEOUT_MS
+        val deadline = System.nanoTime() + REQUEST_DEADLINE_MS * 1_000_000L
         val input = BufferedInputStream(socket.getInputStream())
-        val requestLine = readLineLimited(input, 4096) ?: return
+        val requestLine = readLineLimited(input, 4096, deadline) ?: return
         val parts = requestLine.split(' ')
         if (parts.size < 2) return respondJson(socket, 400, JSONObject().put("error", "bad_request"))
         val method = parts[0].uppercase()
@@ -143,7 +178,7 @@ class LocalControlServer(
         var totalHeaders = 0
 
         while (true) {
-            val line = readLineLimited(input, 8192) ?: break
+            val line = readLineLimited(input, 8192, deadline) ?: break
             if (line.isEmpty()) break
             totalHeaders += line.length
             if (totalHeaders > 32_768) return respondJson(socket, 431, JSONObject().put("error", "headers_too_large"))
@@ -160,7 +195,9 @@ class LocalControlServer(
 
         val declaredLength = headers["content-length"]?.toLongOrNull() ?: 0L
         if (declaredLength < 0L || declaredLength > MAX_BODY_BYTES) return respondJson(socket, 413, JSONObject().put("error", "body_too_large"))
-        val body = if (declaredLength > 0) readFixed(input, declaredLength.toInt()).toString(StandardCharsets.UTF_8) else ""
+        val body = if (declaredLength > 0) {
+            readFixed(input, declaredLength.toInt(), deadline).toString(StandardCharsets.UTF_8)
+        } else ""
         cleanup()
 
         when {
@@ -168,6 +205,7 @@ class LocalControlServer(
             method == "GET" && target == "/styles.css" -> asset(socket, "web/styles.css", "text/css; charset=utf-8")
             method == "GET" && target == "/app.js" -> asset(socket, "web/app.js", "application/javascript; charset=utf-8")
             method == "GET" && target == "/stability.js" -> asset(socket, "web/stability.js", "application/javascript; charset=utf-8")
+            method == "GET" && target == "/quality.js" -> asset(socket, "web/quality.js", "application/javascript; charset=utf-8")
             method == "GET" && target == "/strong-pair.js" -> asset(socket, "web/strong-pair.js", "application/javascript; charset=utf-8")
             method == "GET" && target == "/reconnect.js" -> asset(socket, "web/reconnect.js", "application/javascript; charset=utf-8")
             method == "GET" && target == "/transfer.js" -> asset(socket, "web/transfer.js", "application/javascript; charset=utf-8")
@@ -371,10 +409,11 @@ class LocalControlServer(
             .digest(token.toByteArray(StandardCharsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
 
-    private fun readFixed(input: BufferedInputStream, length: Int): ByteArray {
+    private fun readFixed(input: BufferedInputStream, length: Int, deadlineNanos: Long): ByteArray {
         val data = ByteArray(length)
         var offset = 0
         while (offset < length) {
+            ensureBeforeDeadline(deadlineNanos)
             val n = input.read(data, offset, length - offset)
             if (n < 0) throw IllegalArgumentException("unexpected end of body")
             offset += n
@@ -382,9 +421,10 @@ class LocalControlServer(
         return data
     }
 
-    private fun readLineLimited(input: BufferedInputStream, max: Int): String? {
+    private fun readLineLimited(input: BufferedInputStream, max: Int, deadlineNanos: Long): String? {
         val out = StringBuilder()
         while (out.length < max) {
+            ensureBeforeDeadline(deadlineNanos)
             val b = input.read()
             if (b == -1) return if (out.isEmpty()) null else out.toString()
             if (b == '\n'.code) break
@@ -392,6 +432,10 @@ class LocalControlServer(
         }
         if (out.length >= max) throw IllegalArgumentException("line too long")
         return out.toString()
+    }
+
+    private fun ensureBeforeDeadline(deadlineNanos: Long) {
+        if (System.nanoTime() > deadlineNanos) throw IllegalArgumentException("request_timeout")
     }
 
     private fun respondJson(socket: Socket, code: Int, obj: JSONObject) =
@@ -434,5 +478,8 @@ class LocalControlServer(
         private const val MAX_SDP_CHARS = 180_000
         private const val SESSION_TTL_MS = 30 * 60_000L
         private const val PENDING_TTL_MS = 90_000L
+        private const val SOCKET_READ_TIMEOUT_MS = 2_500
+        private const val REQUEST_DEADLINE_MS = 6_000L
+        private const val MAX_CONNECTIONS_PER_IP = 4
     }
 }
