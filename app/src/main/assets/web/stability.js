@@ -10,13 +10,11 @@
   let lastPacketsLost = 0;
   let lastEmitted = 0;
   let lastJitterDelay = 0;
-  let currentAdaptiveProfile = 'balanced';
+  let currentAutoTier = 'balanced';
   let badQualityWindows = 0;
   let goodQualityWindows = 0;
-  let lastProfileChangeAt = 0;
+  let lastTierChangeAt = 0;
   let frameCanvasMismatch = false;
-
-  preferHardwareFriendlyVideoCodec = function() {};
 
   function physicalOrientation() {
     if (lastStableOrientation !== 'unknown') return lastStableOrientation;
@@ -25,16 +23,16 @@
     return vw && vh ? (vw > vh ? 'landscape' : 'portrait') : 'unknown';
   }
 
-  function setAspectClass() {
-    el.stage.classList.remove('aspect-20-9','aspect-19-5-9','aspect-16-9','aspect-4-3');
-    if (physicalOrientation() !== 'landscape') return;
+  function setExactAspectRatio() {
+    const orientation = physicalOrientation();
     const w = Number(remoteGeometry?.displayWidth || 0);
     const h = Number(remoteGeometry?.displayHeight || 0);
-    const ratio = w > 0 && h > 0 ? Math.max(w,h) / Math.min(w,h) : 20 / 9;
-    if (ratio >= 2.19) el.stage.classList.add('aspect-20-9');
-    else if (ratio >= 2.05) el.stage.classList.add('aspect-19-5-9');
-    else if (ratio >= 1.65) el.stage.classList.add('aspect-16-9');
-    else el.stage.classList.add('aspect-4-3');
+    el.stage.classList.remove('aspect-20-9','aspect-19-5-9','aspect-16-9','aspect-4-3');
+    if (orientation === 'landscape' && w > 1 && h > 1) {
+      el.stage.style.aspectRatio = `${w} / ${h}`;
+    } else {
+      el.stage.style.removeProperty('aspect-ratio');
+    }
   }
 
   function applyViewerGeometry() {
@@ -45,8 +43,7 @@
     const vw = Number(el.video.videoWidth || 0);
     const vh = Number(el.video.videoHeight || 0);
 
-    // This is only a temporary visual fallback. The Android side now actively repairs the
-    // MediaProjection surface when an OEM leaves a portrait WebRTC canvas after rotation.
+    // Temporary visual fallback only. Android is asked to repair the real capture surface.
     frameCanvasMismatch = landscape && vw > 0 && vh > 0 && vw < vh;
 
     el.stage.classList.toggle('remote-landscape', landscape);
@@ -55,7 +52,7 @@
     document.documentElement.classList.toggle('remote-landscape', landscape);
     document.documentElement.classList.toggle('remote-portrait', portrait);
     document.documentElement.classList.toggle('frame-letterbox-fix', frameCanvasMismatch);
-    setAspectClass();
+    setExactAspectRatio();
   }
 
   const originalUpdateViewerGeometry = updateViewerGeometry;
@@ -77,7 +74,7 @@
 
   function applyReceiverTarget(targetMs) {
     if (!pc) return;
-    const target = Math.max(45, Math.min(120, Math.round(targetMs)));
+    const target = Math.max(35, Math.min(120, Math.round(targetMs)));
     for (const receiver of pc.getReceivers()) {
       if (receiver?.track?.kind !== 'video') continue;
       try {
@@ -92,10 +89,10 @@
   tuneReceiverForLowLatency = function(receiver) {
     if (!receiver) return receiver;
     try {
-      if ('jitterBufferTarget' in receiver) receiver.jitterBufferTarget = 80;
+      if ('jitterBufferTarget' in receiver) receiver.jitterBufferTarget = 60;
     } catch {}
     try {
-      if ('playoutDelayHint' in receiver) receiver.playoutDelayHint = 0.08;
+      if ('playoutDelayHint' in receiver) receiver.playoutDelayHint = 0.06;
     } catch {}
     return receiver;
   };
@@ -103,10 +100,14 @@
   const originalApplyRemoteGeometry = applyRemoteGeometry;
   applyRemoteGeometry = function(data) {
     originalApplyRemoteGeometry(data);
-    const sourceW = Number(data?.captureContentWidth || data?.displayWidth || 0);
-    const sourceH = Number(data?.captureContentHeight || data?.displayHeight || 0);
+    const sourceW = Number(data?.displayWidth || 0);
+    const sourceH = Number(data?.displayHeight || 0);
     const expected = data?.orientation || (sourceW && sourceH ? (sourceW > sourceH ? 'landscape' : 'portrait') : 'unknown');
     if (expected !== 'unknown') lastStableOrientation = expected;
+    if (data?.autoTier) {
+      currentAutoTier = data.autoTier;
+      window.RemoteLinkQuality?.updateAutoTier?.(currentAutoTier);
+    }
     applyViewerGeometry();
     scheduleOrientationConsistencyCheck();
   };
@@ -115,6 +116,16 @@
     setTimeout(checkOrientationConsistency, 150);
     setTimeout(checkOrientationConsistency, 700);
     setTimeout(checkOrientationConsistency, 1300);
+  }
+
+  function sendSessionCommand(payload) {
+    if (!channelAuthenticated || !control || control.readyState !== 'open') return false;
+    try {
+      control.send(JSON.stringify({...payload, seq:++commandSeq}));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   function checkOrientationConsistency() {
@@ -130,23 +141,28 @@
       return;
     }
 
-    // Keep the viewer usable immediately while asking Android to repair the real capture surface.
     const now = Date.now();
     if (now - lastGeometryRepairAt < 1000 || repairAttempts >= 3) return;
     lastGeometryRepairAt = now;
     repairAttempts += 1;
-    sendControl({ type:'capture_geometry_refresh' });
+    sendSessionCommand({ type:'capture_geometry_refresh' });
   }
 
-  function requestProfile(profile, reason) {
+  function autoEnabled() {
+    return (window.RemoteLinkQuality?.mode?.() || 'auto') === 'auto';
+  }
+
+  function requestAutoTier(tier, reason) {
+    if (!autoEnabled()) return;
     if (!channelAuthenticated || !control || control.readyState !== 'open') return;
-    if (profile === currentAdaptiveProfile) return;
+    if (tier === currentAutoTier) return;
     const now = Date.now();
-    if (now - lastProfileChangeAt < 4500) return;
-    lastProfileChangeAt = now;
-    currentAdaptiveProfile = profile;
-    sendControl({ type:'capture_profile', profile });
-    if (reason) setMessage(reason, profile === 'balanced' ? 'success' : '');
+    if (now - lastTierChangeAt < 4500) return;
+    if (!sendSessionCommand({type:'capture_auto_tier', tier})) return;
+    lastTierChangeAt = now;
+    currentAutoTier = tier;
+    window.RemoteLinkQuality?.updateAutoTier?.(tier);
+    if (reason) setMessage(reason, tier === 'fluid' ? 'success' : '');
   }
 
   const originalBindControlChannel = bindControlChannel;
@@ -159,7 +175,7 @@
       previousMessage?.call(channel, ev);
 
       if (data?.type === 'auth_ok') {
-        currentAdaptiveProfile = 'balanced';
+        currentAutoTier = 'balanced';
         badQualityWindows = 0;
         goodQualityWindows = 0;
         lastPacketsReceived = 0;
@@ -168,15 +184,20 @@
         lastJitterDelay = 0;
         setTimeout(() => {
           if (channelAuthenticated && control?.readyState === 'open') {
-            sendControl({ type:'capture_profile', profile:'balanced' });
-            applyReceiverTarget(80);
+            applyReceiverTarget(60);
             applyViewerGeometry();
           }
         }, 80);
         scheduleOrientationConsistencyCheck();
       }
 
+      if (data?.type === 'capture_auto_tier_result' && data.ok) {
+        currentAutoTier = data.autoTier || currentAutoTier;
+        window.RemoteLinkQuality?.updateAutoTier?.(currentAutoTier);
+      }
+
       if (data?.type === 'display_geometry') {
+        if (data.autoTier) currentAutoTier = data.autoTier;
         applyViewerGeometry();
         scheduleOrientationConsistencyCheck();
       }
@@ -211,16 +232,23 @@
       const packetWindow = deltaReceived + deltaLost;
       const lossPct = packetWindow > 0 ? (deltaLost / packetWindow) * 100 : 0;
       const bufferNowMs = deltaEmitted > 0 ? (deltaJitterDelay / deltaEmitted) * 1000 : 0;
+      window.RemoteLinkQuality?.updateNetworkStats?.({jitterMs, lossPct, bufferMs:bufferNowMs});
 
-      let targetMs = 55;
+      let targetMs = 42;
       if (jitterMs > 25 || lossPct > 1.0) targetMs = 115;
-      else if (jitterMs > 12 || lossPct > 0.3) targetMs = 85;
-      else if (jitterMs > 7 || lossPct > 0.1) targetMs = 70;
+      else if (jitterMs > 12 || lossPct > 0.3) targetMs = 82;
+      else if (jitterMs > 7 || lossPct > 0.1) targetMs = 60;
       applyReceiverTarget(targetMs);
 
-      const severe = bufferNowMs > 180 || jitterMs > 32 || lossPct > 1.2;
-      const pressured = bufferNowMs > 125 || jitterMs > 22 || lossPct > 0.6;
-      const healthy = bufferNowMs > 0 && bufferNowMs < 90 && jitterMs < 14 && lossPct < 0.35;
+      if (!autoEnabled()) {
+        badQualityWindows = 0;
+        goodQualityWindows = 0;
+        return;
+      }
+
+      const severe = bufferNowMs > 185 || jitterMs > 32 || lossPct > 1.2;
+      const pressured = bufferNowMs > 125 || jitterMs > 20 || lossPct > 0.55;
+      const healthy = (bufferNowMs === 0 || bufferNowMs < 82) && jitterMs < 11 && lossPct < 0.25;
 
       if (severe) {
         badQualityWindows += 2;
@@ -236,12 +264,18 @@
         goodQualityWindows = 0;
       }
 
-      if (currentAdaptiveProfile === 'balanced' && badQualityWindows >= 3) {
+      if (currentAutoTier === 'fluid' && badQualityWindows >= 2) {
         badQualityWindows = 0;
-        requestProfile('economy', 'Rede local pressionada: reduzindo vídeo temporariamente para cortar a fila de atraso.');
-      } else if (currentAdaptiveProfile === 'economy' && goodQualityWindows >= 5) {
+        requestAutoTier('balanced', 'A rede variou: reduzindo de 60 FPS para manter a resposta rápida.');
+      } else if (currentAutoTier === 'balanced' && badQualityWindows >= 3) {
+        badQualityWindows = 0;
+        requestAutoTier('economy', 'Rede local pressionada: reduzindo vídeo temporariamente para cortar a fila de atraso.');
+      } else if (currentAutoTier === 'economy' && goodQualityWindows >= 4) {
         goodQualityWindows = 0;
-        requestProfile('balanced', 'Rede estabilizada: restaurando qualidade balanceada.');
+        requestAutoTier('balanced', 'Rede estabilizada: restaurando qualidade balanceada.');
+      } else if (currentAutoTier === 'balanced' && goodQualityWindows >= 6) {
+        goodQualityWindows = 0;
+        requestAutoTier('fluid', 'Rede excelente: Auto ativou 60 FPS.');
       }
     } catch {}
   }
@@ -261,9 +295,6 @@
     }, 800);
   };
 
-  // startWebRtc() can replace the peer during an automatic reconnect before an old local timer
-  // observes pc === null. Explicit cleanup prevents one geometry/latency watchdog per reconnect
-  // from accumulating and repeatedly issuing repair/profile commands.
   const originalClosePeerOnly = closePeerOnly;
   closePeerOnly = function(...args) {
     clearInterval(latencyTuningTimer);
