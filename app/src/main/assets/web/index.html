@@ -91,8 +91,8 @@
 
         <section class="panel quality-panel">
           <div class="section-head"><div><span class="eyebrow">TRANSMISSÃO</span><h3>Qualidade e latência</h3></div><span class="mini-pill">adaptativo</span></div>
-          <p>Auto mede jitter, perda e buffer para equilibrar qualidade e atraso. Você também pode fixar um perfil ou configurar manualmente.</p>
-          <label class="quality-label" for="qualityMode">Modo</label>
+          <p>Auto mede rede e decoder para equilibrar qualidade, estabilidade e atraso. A superfície da tela pode ficar automática ou ser ajustada separadamente.</p>
+          <label class="quality-label" for="qualityMode">Qualidade do vídeo</label>
           <select id="qualityMode" class="quality-select">
             <option value="auto">Auto adaptativo</option>
             <option value="economy">Econômico</option>
@@ -103,9 +103,25 @@
             <option value="custom">Personalizado</option>
           </select>
 
+          <label class="quality-label" for="captureSurfaceMode">Tamanho da tela capturada</label>
+          <select id="captureSurfaceMode" class="quality-select">
+            <option value="auto">Automático • tamanho informado pelo Android</option>
+            <option value="custom">Personalizado • preservar proporção</option>
+          </select>
+          <div id="captureSurfaceFields" class="custom-quality hidden">
+            <label><span>Maior lado da superfície</span><select id="captureSurfaceMaxEdge" class="quality-select compact">
+              <option value="960">960 px</option><option value="1080">1080 px</option><option value="1200">1200 px</option>
+              <option value="1280">1280 px</option><option value="1440">1440 px</option><option value="1600">1600 px</option>
+              <option value="1920">1920 px</option><option value="2160">2160 px</option><option value="2400" selected>2400 px</option>
+              <option value="2560">2560 px</option><option value="3200">3200 px</option><option value="3840">3840 px</option><option value="4096">4096 px</option>
+            </select></label>
+            <button id="applyCaptureSurfaceButton" class="secondary quality-apply" type="button">Aplicar tamanho da tela</button>
+          </div>
+          <div class="quality-status"><strong id="captureSurfaceLive">Superfície: automático</strong><small id="captureSurfaceDetail">Aguardando geometria do Android…</small></div>
+
           <div id="customQualityFields" class="custom-quality hidden">
             <div class="quality-grid">
-              <label><span>Resolução máx.</span><select id="customMaxEdge" class="quality-select compact">
+              <label><span>Resolução máx. do vídeo</span><select id="customMaxEdge" class="quality-select compact">
                 <option value="720">720 px</option><option value="960">960 px</option><option value="1080">1080 px</option>
                 <option value="1280" selected>1280 px</option><option value="1440">1440 px</option><option value="1600">1600 px</option>
                 <option value="1920">1920 px</option><option value="2160">2160 px</option><option value="2560">2560 px</option>
@@ -117,7 +133,7 @@
             </div>
             <label class="quality-label bitrate-label" for="customBitrate"><span>Bitrate máximo</span><output id="customBitrateValue">4.8 Mb/s</output></label>
             <input id="customBitrate" class="quality-range" type="range" min="0.6" max="20" step="0.1" value="4.8">
-            <button id="applyQualityButton" class="secondary quality-apply" type="button">Aplicar personalizado</button>
+            <button id="applyQualityButton" class="secondary quality-apply" type="button">Aplicar qualidade personalizada</button>
           </div>
           <div class="quality-status"><strong id="qualityLive">Auto adaptativo</strong><small id="qualityNetwork">Aguardando telemetria da conexão…</small></div>
         </section>
