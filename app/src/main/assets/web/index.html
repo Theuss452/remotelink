@@ -89,16 +89,65 @@
           </div>
         </section>
 
+        <section class="panel quality-panel">
+          <div class="section-head"><div><span class="eyebrow">TRANSMISSÃO</span><h3>Qualidade e latência</h3></div><span class="mini-pill">adaptativo</span></div>
+          <p>Auto mede rede e decoder para equilibrar qualidade, estabilidade e atraso. A superfície da tela pode ficar automática ou ser ajustada separadamente.</p>
+          <label class="quality-label" for="qualityMode">Qualidade do vídeo</label>
+          <select id="qualityMode" class="quality-select">
+            <option value="auto">Auto adaptativo</option>
+            <option value="economy">Econômico</option>
+            <option value="balanced">Balanceado</option>
+            <option value="high">Alta qualidade</option>
+            <option value="fluid">Fluido • até 45 FPS</option>
+            <option value="fluid60">Fluido 60 • até 60 FPS</option>
+            <option value="custom">Personalizado</option>
+          </select>
+
+          <label class="quality-label" for="captureSurfaceMode">Tamanho da tela capturada</label>
+          <select id="captureSurfaceMode" class="quality-select">
+            <option value="auto">Automático • tamanho informado pelo Android</option>
+            <option value="custom">Personalizado • preservar proporção</option>
+          </select>
+          <div id="captureSurfaceFields" class="custom-quality hidden">
+            <label><span>Maior lado da superfície</span><select id="captureSurfaceMaxEdge" class="quality-select compact">
+              <option value="960">960 px</option><option value="1080">1080 px</option><option value="1200">1200 px</option>
+              <option value="1280">1280 px</option><option value="1440">1440 px</option><option value="1600">1600 px</option>
+              <option value="1920">1920 px</option><option value="2160">2160 px</option><option value="2400" selected>2400 px</option>
+              <option value="2560">2560 px</option><option value="3200">3200 px</option><option value="3840">3840 px</option><option value="4096">4096 px</option>
+            </select></label>
+            <button id="applyCaptureSurfaceButton" class="secondary quality-apply" type="button">Aplicar tamanho da tela</button>
+          </div>
+          <div class="quality-status"><strong id="captureSurfaceLive">Superfície: automático</strong><small id="captureSurfaceDetail">Aguardando geometria do Android…</small></div>
+
+          <div id="customQualityFields" class="custom-quality hidden">
+            <div class="quality-grid">
+              <label><span>Resolução máx. do vídeo</span><select id="customMaxEdge" class="quality-select compact">
+                <option value="720">720 px</option><option value="960">960 px</option><option value="1080">1080 px</option>
+                <option value="1280" selected>1280 px</option><option value="1440">1440 px</option><option value="1600">1600 px</option>
+                <option value="1920">1920 px</option><option value="2160">2160 px</option><option value="2560">2560 px</option>
+              </select></label>
+              <label><span>FPS</span><select id="customFps" class="quality-select compact">
+                <option value="15">15</option><option value="24">24</option><option value="30" selected>30</option>
+                <option value="45">45</option><option value="60">60</option>
+              </select></label>
+            </div>
+            <label class="quality-label bitrate-label" for="customBitrate"><span>Bitrate máximo</span><output id="customBitrateValue">4.8 Mb/s</output></label>
+            <input id="customBitrate" class="quality-range" type="range" min="0.6" max="20" step="0.1" value="4.8">
+            <button id="applyQualityButton" class="secondary quality-apply" type="button">Aplicar qualidade personalizada</button>
+          </div>
+          <div class="quality-status"><strong id="qualityLive">Auto adaptativo</strong><small id="qualityNetwork">Aguardando telemetria da conexão…</small></div>
+        </section>
+
         <section class="panel text-panel">
-          <div class="section-head"><div><span class="eyebrow">TECLADO</span><h3>Teclado do Chromebook</h3></div><span class="mini-pill">v0.7</span></div>
+          <div class="section-head"><div><span class="eyebrow">TECLADO</span><h3>Teclado do Chromebook</h3></div><span class="mini-pill">rápido</span></div>
           <p>Clique primeiro em um campo no Android. Com o Modo controle ativo, caracteres, Backspace, Delete, setas, Home/End, Ctrl+A e Enter são enviados diretamente. Esc sai do Modo controle.</p>
           <div class="text-send-row"><input id="textInput" type="text" maxlength="4000" placeholder="Ou envie um texto completo…" disabled><button id="sendTextButton" class="secondary" type="button" disabled>Enviar</button></div>
         </section>
 
         <section class="panel session-panel">
           <div class="section-head"><div><span class="eyebrow">SEGURANÇA</span><h3>Sessão local</h3></div><span class="shield">✓</span></div>
-          <div class="secure-copy"><strong>QR 256-bit + HMAC + SAS + WebRTC</strong><small>Pareamento forte de uso único • SRTP para mídia • DTLS no DataChannel.</small></div>
-          <div class="session-rule"><span></span><p>Candidatos ICE do navegador ficam presos ao mesmo IP que foi pareado e aprovado no Android.</p></div>
+          <div class="secure-copy"><strong>QR 256-bit + HMAC + SAS + WebRTC</strong><small>Pareamento forte de uso único • SRTP para mídia • DTLS nos DataChannels.</small></div>
+          <div class="session-rule"><span></span><p>Candidatos ICE do navegador ficam presos ao mesmo IP que foi pareado e aprovado no Android. VPN pode fornecer Internet sem virar a interface do RemoteLink.</p></div>
         </section>
 
         <section class="security-note"><span>i</span><p><strong>Defesa forte na LAN.</strong> O QR impede brute force do código curto e a prova HMAC/SAS detecta adulterações enquanto o cliente carregado for confiável. O HTML inicial ainda é servido por HTTP local; use redes privadas confiáveis até existir um bootstrap HTTPS/pinado.</p></section>
@@ -107,6 +156,7 @@
   </div>
   <script src="/app.js" defer></script>
   <script src="/stability.js" defer></script>
+  <script src="/quality.js" defer></script>
   <script src="/strong-pair.js" defer></script>
   <script src="/transfer.js" defer></script>
   <script src="/reconnect.js" defer></script>

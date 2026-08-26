@@ -15,14 +15,21 @@ import org.webrtc.VideoFrame
 import org.webrtc.VideoSink
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Full-display MediaProjection capturer used by RemoteLink.
  *
- * Rotation geometry has exactly one authority: MediaProjection.onCapturedContentResize().
- * WebRtcHost is deliberately not allowed to resize the VirtualDisplay after capture starts.
- * This avoids the race where Android briefly produced the correct full landscape frame and a
- * delayed changeCaptureFormat() then stretched/cropped it back to the old geometry.
+ * Important rules:
+ * 1. Encoder/downscale resolution is independent from this VirtualDisplay surface.
+ * 2. A configuration/rotation change updates the existing VirtualDisplay with resize() and a
+ *    freshly attached Surface. Android 14+ allows one createVirtualDisplay() call per projection
+ *    session, and the documented resize + new Surface flow also clears stale buffer geometry that
+ *    can otherwise look like a zoomed/half-screen capture on some devices.
+ * 3. If Android exposes a uniformly scaled geometry (for example 2400x1080 -> 1200x540), density
+ *    is scaled by the same factor so the logical viewport stays constant instead of making UI
+ *    elements twice as large.
  */
 class ScreenCapturerAndroid(
     private val permissionData: Intent,
@@ -38,25 +45,27 @@ class ScreenCapturerAndroid(
 
     @Volatile private var width = 0
     @Volatile private var height = 0
-    private var densityDpi = 0
+    @Volatile private var densityDpi = 0
+    private var baseDensityDpi = 0
+    private var referenceLongEdge = 0
+    private var referenceShortEdge = 0
     @Volatile private var capturing = false
     @Volatile private var disposed = false
 
     private val internalProjectionCallback = object : MediaProjection.Callback() {
         override fun onCapturedContentResize(width: Int, height: Int) {
             if (disposed || !capturing || width <= 1 || height <= 1) return
-            resizeFromProjection(width, height)
-            clientProjectionCallback.onCapturedContentResize(this@ScreenCapturerAndroid.width, this@ScreenCapturerAndroid.height)
+
+            // Treat callback dimensions as a change signal. WebRtcHost decides whether Auto or a
+            // user-selected custom surface size should be applied, then calls changeCaptureFormat.
+            clientProjectionCallback.onCapturedContentResize(width, height)
         }
 
         override fun onStop() {
             val wasCapturing = capturing
             capturing = false
-            try { virtualDisplay?.setSurface(null) } catch (_: Exception) {}
-            try { virtualDisplay?.release() } catch (_: Exception) {}
-            virtualDisplay = null
-            try { surface?.release() } catch (_: Exception) {}
-            surface = null
+            releaseVirtualDisplay()
+            releaseSurface()
             mediaProjection = null
             if (wasCapturing) capturerObserver?.onCapturerStopped()
             clientProjectionCallback.onStop()
@@ -72,7 +81,8 @@ class ScreenCapturerAndroid(
         textureHelper = surfaceTextureHelper
         this.capturerObserver = capturerObserver
         appContext = applicationContext.applicationContext
-        densityDpi = applicationContext.resources.configuration.densityDpi.coerceAtLeast(1)
+        baseDensityDpi = applicationContext.resources.configuration.densityDpi.coerceAtLeast(1)
+        densityDpi = baseDensityDpi
     }
 
     @Synchronized
@@ -86,6 +96,9 @@ class ScreenCapturerAndroid(
 
         this.width = even(width)
         this.height = even(height)
+        referenceLongEdge = maxOf(this.width, this.height)
+        referenceShortEdge = minOf(this.width, this.height)
+        densityDpi = baseDensityDpi
         helper.setTextureSize(this.width, this.height)
         helper.setFrameRotation(0)
 
@@ -115,14 +128,15 @@ class ScreenCapturerAndroid(
     }
 
     /**
-     * Intentionally ignored after startCapture(). The WebRTC VideoCapturer API exposes this
-     * method, but for MediaProjection Android itself is the reliable source of rotated content
-     * dimensions. Encoder downscaling is handled separately by VideoSource.adaptOutputFormat().
+     * Changes the MediaProjection surface only. Encoder resolution/FPS are controlled separately
+     * by VideoSource.adaptOutputFormat().
      */
-    override fun changeCaptureFormat(width: Int, height: Int, framerate: Int) = Unit
+    override fun changeCaptureFormat(width: Int, height: Int, framerate: Int) {
+        if (disposed || !capturing || width <= 1 || height <= 1) return
+        resizeCaptureSurface(width, height)
+    }
 
-    @Synchronized
-    private fun resizeFromProjection(requestedWidth: Int, requestedHeight: Int) {
+    private fun resizeCaptureSurface(requestedWidth: Int, requestedHeight: Int) {
         val newWidth = even(requestedWidth)
         val newHeight = even(requestedHeight)
         if (newWidth <= 1 || newHeight <= 1) return
@@ -131,19 +145,61 @@ class ScreenCapturerAndroid(
         val helper = textureHelper ?: return
         runOnCaptureThread(helper) {
             if (disposed || !capturing) return@runOnCaptureThread
+            if (newWidth == width && newHeight == height) return@runOnCaptureThread
 
-            // Update the consumer buffer before the producer. Both dimensions then represent
-            // exactly the content size Android reported; there is no independent display guess.
+            val display = virtualDisplay ?: return@runOnCaptureThread
+            val newDensity = densityForGeometry(newWidth, newHeight)
+
+            // Android's supported configuration-change flow is resize() + a Surface whose buffer
+            // size matches the new geometry. Reusing only the old Surface is what can leave an OEM
+            // compositor with portrait viewport state after switching to landscape.
+            try { display.setSurface(null) } catch (_: Exception) {}
+            releaseSurface()
+
             helper.setTextureSize(newWidth, newHeight)
-            virtualDisplay?.resize(newWidth, newHeight, densityDpi)
+            display.resize(newWidth, newHeight, newDensity)
+
+            val newSurface = Surface(helper.surfaceTexture)
+            surface = newSurface
+            display.setSurface(newSurface)
 
             width = newWidth
             height = newHeight
+            densityDpi = newDensity
         }
+    }
+
+    private fun densityForGeometry(newWidth: Int, newHeight: Int): Int {
+        val refLong = referenceLongEdge
+        val refShort = referenceShortEdge
+        if (refLong <= 1 || refShort <= 1 || baseDensityDpi <= 0) return baseDensityDpi.coerceAtLeast(1)
+
+        val longScale = maxOf(newWidth, newHeight).toDouble() / refLong.toDouble()
+        val shortScale = minOf(newWidth, newHeight).toDouble() / refShort.toDouble()
+
+        // Only compensate DPI for an approximately uniform resolution scale. Rotation itself has
+        // scale ~= 1 because long/short edges are compared independently of orientation.
+        val uniform = abs(longScale - shortScale) <= 0.08
+        if (!uniform) return baseDensityDpi
+
+        val scale = ((longScale + shortScale) / 2.0).coerceIn(0.25, 2.0)
+        return (baseDensityDpi * scale).roundToInt().coerceIn(MIN_DENSITY_DPI, MAX_DENSITY_DPI)
+    }
+
+    private fun releaseVirtualDisplay() {
+        try { virtualDisplay?.setSurface(null) } catch (_: Exception) {}
+        try { virtualDisplay?.release() } catch (_: Exception) {}
+        virtualDisplay = null
+    }
+
+    private fun releaseSurface() {
+        try { surface?.release() } catch (_: Exception) {}
+        surface = null
     }
 
     fun currentWidth(): Int = width
     fun currentHeight(): Int = height
+    fun currentDensityDpi(): Int = densityDpi
 
     @Synchronized
     override fun stopCapture() {
@@ -157,11 +213,8 @@ class ScreenCapturerAndroid(
             val wasCapturing = capturing
             capturing = false
             try { helper.stopListening() } catch (_: Exception) {}
-            try { virtualDisplay?.setSurface(null) } catch (_: Exception) {}
-            try { virtualDisplay?.release() } catch (_: Exception) {}
-            virtualDisplay = null
-            try { surface?.release() } catch (_: Exception) {}
-            surface = null
+            releaseVirtualDisplay()
+            releaseSurface()
 
             val projection = mediaProjection
             mediaProjection = null
@@ -204,4 +257,9 @@ class ScreenCapturerAndroid(
     }
 
     private fun even(value: Int): Int = (value.coerceAtLeast(2) / 2) * 2
+
+    companion object {
+        private const val MIN_DENSITY_DPI = 72
+        private const val MAX_DENSITY_DPI = 1000
+    }
 }

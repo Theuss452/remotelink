@@ -2,6 +2,7 @@ package app.remotelink.network
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import java.net.Inet4Address
 import java.net.InetAddress
@@ -9,11 +10,35 @@ import java.net.InetAddress
 object LanPolicy {
     data class WifiBinding(val address: Inet4Address, val prefixLength: Int)
 
+    /**
+     * Finds a private IPv4 that belongs to a real Wi-Fi transport.
+     *
+     * Do not rely only on ConnectivityManager.activeNetwork: when Android VpnService apps
+     * (SocksLite, Rev Hunter, WireGuard, etc.) become the default route, activeNetwork points
+     * at TRANSPORT_VPN even though the local Wi-Fi interface is still connected and is exactly
+     * where RemoteLink must remain bound. We prefer the active network when it is Wi-Fi, then
+     * inspect the remaining networks for a Wi-Fi transport. VPN/cellular interfaces are never
+     * returned, so enabling a VPN does not expose the RemoteLink listener inside the tunnel.
+     */
     fun findWifiBinding(context: Context): WifiBinding? {
         val cm = context.getSystemService(ConnectivityManager::class.java)
-        val network = cm.activeNetwork ?: return null
+        val active = cm.activeNetwork
+        if (active != null) {
+            wifiBindingFor(cm, active)?.let { return it }
+        }
+        for (network in cm.allNetworks) {
+            if (network == active) continue
+            wifiBindingFor(cm, network)?.let { return it }
+        }
+        return null
+    }
+
+    private fun wifiBindingFor(cm: ConnectivityManager, network: Network): WifiBinding? {
         val caps = cm.getNetworkCapabilities(network) ?: return null
         if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return null
+        // Be explicit: a vendor/VPN implementation must never make a tunnel eligible simply
+        // because it also reports an underlying Wi-Fi transport.
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return null
         val props = cm.getLinkProperties(network) ?: return null
         val link = props.linkAddresses.firstOrNull {
             it.address is Inet4Address &&

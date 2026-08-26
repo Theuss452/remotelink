@@ -65,11 +65,6 @@ class RemoteAccessibilityService : AccessibilityService() {
         return Point(dm.widthPixels.coerceAtLeast(1), dm.heightPixels.coerceAtLeast(1))
     }
 
-    /**
-     * GestureDescription coordinates live in the accessibility window/display space.
-     * Prefer the active root bounds because they update with rotation and account for
-     * OEM/system-bar insets more reliably than a cached portrait DisplayMetrics size.
-     */
     private fun gestureBounds(): Rect {
         val root = rootInActiveWindow
         if (root != null) {
@@ -135,16 +130,20 @@ class RemoteAccessibilityService : AccessibilityService() {
         return true
     }
 
+    /**
+     * Multiple browser positions can arrive while Android is executing one gesture segment.
+     * Keep only the newest pending point: stale pointer positions are never queued, which keeps
+     * perceived latency bounded even when rendering or Wi-Fi briefly stalls.
+     */
     fun dragMoveNormalized(x: Float, y: Float): Boolean {
         val (px, py) = normalizedToPixels(x, y)
         gestureHandler.post {
             synchronized(dragLock) {
                 val state = dragState ?: return@post
+                if (state.ending) return@post
                 state.pendingX = px
                 state.pendingY = py
-                if (!state.inFlight && !state.ending) {
-                    dispatchNextDragSegmentLocked(state)
-                }
+                if (!state.inFlight) dispatchNextDragSegmentLocked(state)
             }
         }
         return true
@@ -183,13 +182,13 @@ class RemoteAccessibilityService : AccessibilityService() {
                 dragState?.let {
                     if (!it.inFlight) dispatchNextDragSegmentLocked(it)
                 }
-                gestureHandler.postDelayed({ startDragInternal(px, py) }, 90)
+                gestureHandler.postDelayed({ startDragInternal(px, py) }, DRAG_RESTART_DELAY_MS)
                 return
             }
 
             val generation = ++dragGeneration
             val path = Path().apply { moveTo(px, py) }
-            val stroke = GestureDescription.StrokeDescription(path, 0, 55, true)
+            val stroke = GestureDescription.StrokeDescription(path, 0, DRAG_START_MS, true)
             val state = DragState(
                 generation,
                 stroke,
@@ -219,9 +218,10 @@ class RemoteAccessibilityService : AccessibilityService() {
             (targetY - state.currentY).toDouble()
         )
         val duration = if (distance < 1.0) {
-            35L
+            DRAG_MIN_SEGMENT_MS
         } else {
-            (35L + (distance / 18.0).toLong()).coerceIn(35L, 95L)
+            (DRAG_MIN_SEGMENT_MS + (distance / 28.0).toLong())
+                .coerceIn(DRAG_MIN_SEGMENT_MS, DRAG_MAX_SEGMENT_MS)
         }
 
         val path = Path().apply {
@@ -471,6 +471,10 @@ class RemoteAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val MAX_TEXT_LENGTH = 4000
+        private const val DRAG_START_MS = 32L
+        private const val DRAG_MIN_SEGMENT_MS = 24L
+        private const val DRAG_MAX_SEGMENT_MS = 58L
+        private const val DRAG_RESTART_DELAY_MS = 60L
 
         @Volatile
         var instance: RemoteAccessibilityService? = null
