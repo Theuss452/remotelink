@@ -13,7 +13,7 @@ val updateManifestUrl = (System.getenv("REMOTELINK_UPDATE_MANIFEST_URL") ?: "").
 android {
     namespace = "app.remotelink"
     compileSdk = 36
-    defaultConfig { applicationId = "app.remotelink"; minSdk = 26; targetSdk = 36; versionCode = 22; versionName = "0.9.7-alpha" }
+    defaultConfig { applicationId = "app.remotelink"; minSdk = 26; targetSdk = 36; versionCode = 23; versionName = "0.9.8-alpha" }
     buildFeatures { buildConfig = true }
     flavorDimensions += "distribution"
     productFlavors {
