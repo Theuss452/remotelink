@@ -19,11 +19,12 @@ import java.util.concurrent.TimeUnit
 /**
  * Full-display MediaProjection capturer used by RemoteLink.
  *
- * MediaProjection.onCapturedContentResize() is the preferred geometry authority because it
- * describes the content Android is actually projecting. WebRtcHost may also request the current
- * physical display geometry through changeCaptureFormat() as an idempotent repair fallback for
- * devices/OEMs that delay or miss a resize callback. Both paths converge on the same resize
- * routine, so the SurfaceTexture and VirtualDisplay can never intentionally diverge.
+ * The VirtualDisplay always follows the physical display geometry supplied by WebRtcHost.
+ * MediaProjection.onCapturedContentResize() is treated as a change signal only: on some Android
+ * builds it can report a scaled content size (for example 1200x540 for a 2400x1080 display).
+ * Resizing the VirtualDisplay to that scaled size changes the virtual display viewport/density
+ * relationship and makes the remote screen look zoomed/cropped. Stream downscaling belongs only
+ * to VideoSource.adaptOutputFormat(), never to the MediaProjection surface.
  */
 class ScreenCapturerAndroid(
     private val permissionData: Intent,
@@ -46,11 +47,12 @@ class ScreenCapturerAndroid(
     private val internalProjectionCallback = object : MediaProjection.Callback() {
         override fun onCapturedContentResize(width: Int, height: Int) {
             if (disposed || !capturing || width <= 1 || height <= 1) return
-            resizeCaptureSurface(width, height)
-            clientProjectionCallback.onCapturedContentResize(
-                this@ScreenCapturerAndroid.width,
-                this@ScreenCapturerAndroid.height
-            )
+
+            // Do not resize the VirtualDisplay from this callback. Android may report the
+            // scaled capture-content size rather than the physical screen size. WebRtcHost is
+            // notified immediately and re-reads the real display geometry through DisplayManager,
+            // then calls changeCaptureFormat() with that verified physical size.
+            clientProjectionCallback.onCapturedContentResize(width, height)
         }
 
         override fun onStop() {
@@ -119,9 +121,8 @@ class ScreenCapturerAndroid(
     }
 
     /**
-     * Repair path used by WebRtcHost after a display-change notification. This must not resize
-     * the encoder profile; it only makes the MediaProjection surface match the real display.
-     * resizeCaptureSurface() is idempotent, so a late duplicate callback is harmless.
+     * Verified physical-display repair path. This changes only the MediaProjection surface;
+     * encoder resolution/FPS are controlled separately by VideoSource.adaptOutputFormat().
      */
     override fun changeCaptureFormat(width: Int, height: Int, framerate: Int) {
         if (disposed || !capturing || width <= 1 || height <= 1) return
@@ -139,10 +140,8 @@ class ScreenCapturerAndroid(
             if (disposed || !capturing) return@runOnCaptureThread
             if (newWidth == width && newHeight == height) return@runOnCaptureThread
 
-            // All effective geometry mutation happens on the capture thread. This avoids a
-            // lock inversion if an OEM resize callback arrives while WebRtcHost requests repair.
-            // Resize the consumer buffer first, then its producer so Android never has to center
-            // a landscape image inside a portrait VirtualDisplay.
+            // Keep producer and consumer at the same verified physical geometry. Downscaled
+            // stream profiles must never leak into these dimensions.
             helper.setTextureSize(newWidth, newHeight)
             virtualDisplay?.resize(newWidth, newHeight, densityDpi)
 
