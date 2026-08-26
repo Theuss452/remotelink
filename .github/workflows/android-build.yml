@@ -43,9 +43,9 @@ jobs:
       - name: Build direct debug APK
         run: |
           gradle --no-daemon --stacktrace assembleDirectDebug
-          cp app/build/outputs/apk/direct/debug/app-direct-debug.apk RemoteLink-v0.9.5-alpha-direct-debug.apk
+          cp app/build/outputs/apk/direct/debug/app-direct-debug.apk RemoteLink-v0.9.6-alpha-direct-debug.apk
       - uses: actions/upload-artifact@v4
-        with: {name: RemoteLink-v0.9.5-alpha-direct-debug, path: RemoteLink-v0.9.5-alpha-direct-debug.apk, retention-days: 14}
+        with: {name: RemoteLink-v0.9.6-alpha-direct-debug, path: RemoteLink-v0.9.6-alpha-direct-debug.apk, retention-days: 14}
       - name: Check release signing configuration
         id: signing
         run: |
@@ -60,29 +60,29 @@ jobs:
         if: steps.signing.outputs.enabled == 'true'
         run: |
           gradle --no-daemon --stacktrace assembleDirectRelease bundlePlayRelease
-          cp app/build/outputs/apk/direct/release/app-direct-release.apk RemoteLink-v0.9.5-alpha-release.apk
-          cp app/build/outputs/bundle/playRelease/app-play-release.aab RemoteLink-v0.9.5-alpha-play.aab
+          cp app/build/outputs/apk/direct/release/app-direct-release.apk RemoteLink-v0.9.6-alpha-release.apk
+          cp app/build/outputs/bundle/playRelease/app-play-release.aab RemoteLink-v0.9.6-alpha-play.aab
       - name: Verify release APK signature
         if: steps.signing.outputs.enabled == 'true'
         run: |
           APKSIGNER="$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner"
           [[ -x "$APKSIGNER" ]] || APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -maxdepth 2 -type f -name apksigner -perm -111 | sort -V | tail -n 1)"
           [[ -n "$APKSIGNER" && -x "$APKSIGNER" ]] || { echo "apksigner não encontrado" >&2; exit 1; }
-          "$APKSIGNER" verify --verbose --print-certs RemoteLink-v0.9.5-alpha-release.apk
+          "$APKSIGNER" verify --verbose --print-certs RemoteLink-v0.9.6-alpha-release.apk
       - name: Generate update manifest
         if: steps.signing.outputs.enabled == 'true'
         run: |
           python3 - <<'PY'
           import json, os, hashlib
-          name='RemoteLink-v0.9.5-alpha-release.apk'
+          name='RemoteLink-v0.9.6-alpha-release.apk'
           sha=hashlib.sha256(open(name,'rb').read()).hexdigest()
           data={
             'packageName':'app.remotelink',
-            'versionCode':20,
-            'versionName':'0.9.5-alpha',
+            'versionCode':21,
+            'versionName':'0.9.6-alpha',
             'apkUrl':os.environ.get('REMOTELINK_DIRECT_APK_URL','').strip(),
             'sha256':sha,
-            'notes':'RemoteLink v0.9.5-alpha: elimina disputa de redimensionamento na rotação; MediaProjection passa a ser a autoridade da geometria e o viewer volta a contain puro, sem transforms.'
+            'notes':'RemoteLink v0.9.6-alpha: remove o redimensionamento externo atrasado que reaplicava zoom/crop depois da rotação correta. A geometria física passa a ser controlada exclusivamente pelo MediaProjection.'
           }
           open('updates.json','w',encoding='utf-8').write(json.dumps(data,ensure_ascii=False,indent=2)+'\n')
           PY
@@ -90,9 +90,9 @@ jobs:
         if: steps.signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: RemoteLink-v0.9.5-alpha-signed-release
+          name: RemoteLink-v0.9.6-alpha-signed-release
           path: |
-            RemoteLink-v0.9.5-alpha-release.apk
-            RemoteLink-v0.9.5-alpha-play.aab
+            RemoteLink-v0.9.6-alpha-release.apk
+            RemoteLink-v0.9.6-alpha-play.aab
             updates.json
           retention-days: 30
