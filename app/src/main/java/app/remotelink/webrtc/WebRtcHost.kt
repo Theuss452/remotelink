@@ -225,7 +225,10 @@ class WebRtcHost(
             peer = created
             videoSender = created.addTrack(videoTrack, listOf("remotelink-screen"))
 
-            setRemoteDescriptionBlocking(created, SessionDescription(SessionDescription.Type.OFFER, offerSdp))
+            setRemoteDescriptionBlocking(
+                created,
+                SessionDescription(SessionDescription.Type.OFFER, offerSdp)
+            )
             val answer = createAnswerBlocking(created)
             setLocalDescriptionBlocking(created, answer)
             applyCapabilities()
@@ -236,7 +239,9 @@ class WebRtcHost(
 
     fun addRemoteCandidate(sessionHash: String, candidate: SignalCandidate): Boolean {
         if (!isCurrentSession(sessionHash)) return false
-        return peer?.addIceCandidate(IceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.candidate)) == true
+        return peer?.addIceCandidate(
+            IceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.candidate)
+        ) == true
     }
 
     fun drainLocalCandidates(sessionHash: String): List<SignalCandidate> {
@@ -252,7 +257,9 @@ class WebRtcHost(
     }
 
     fun diagnosticState(sessionHash: String): JSONObject {
-        if (!isCurrentSession(sessionHash)) return JSONObject().put("peer", "closed").put("ice", "closed")
+        if (!isCurrentSession(sessionHash)) {
+            return JSONObject().put("peer", "closed").put("ice", "closed")
+        }
         val spec = activeSpec
         val display = physicalDisplaySize()
         val caps = SessionCapabilities.snapshot()
@@ -317,7 +324,10 @@ class WebRtcHost(
             pendingFileApproval = null
             fileReceiver.cancel()
             if (pending != null) {
-                sendJson(pending.channel, JSONObject().put("type", "file_error").put("id", pending.request.id).put("error", reason))
+                sendJson(
+                    pending.channel,
+                    JSONObject().put("type", "file_error").put("id", pending.request.id).put("error", reason)
+                )
             }
         }
     }
@@ -332,11 +342,20 @@ class WebRtcHost(
             if (pending.request.id != id) return
             pendingFileApproval = null
             if (!approved || !SessionCapabilities.canReceiveFiles()) {
-                sendJson(pending.channel, JSONObject().put("type", "file_error").put("id", id).put("error", denialReason ?: if (SessionCapabilities.canReceiveFiles()) "approval_denied" else "capability_denied"))
+                sendJson(
+                    pending.channel,
+                    JSONObject().put("type", "file_error").put("id", id).put(
+                        "error",
+                        denialReason ?: if (SessionCapabilities.canReceiveFiles()) "approval_denied" else "capability_denied"
+                    )
+                )
                 return
             }
             if (!fileAuthenticated || pending.channel !== fileChannel || pending.channel.state() != DataChannel.State.OPEN) {
-                sendJson(pending.channel, JSONObject().put("type", "file_error").put("id", id).put("error", "session_closed"))
+                sendJson(
+                    pending.channel,
+                    JSONObject().put("type", "file_error").put("id", id).put("error", "session_closed")
+                )
                 return
             }
             val request = pending.request
@@ -386,9 +405,13 @@ class WebRtcHost(
             val rotation = display.rotation
             val rotatedLandscape = rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_270
             if (rotatedLandscape && width < height) {
-                val tmp = width; width = height; height = tmp
+                val tmp = width
+                width = height
+                height = tmp
             } else if (!rotatedLandscape && width > height && rotation == Surface.ROTATION_0) {
-                val tmp = width; width = height; height = tmp
+                val tmp = width
+                width = height
+                height = tmp
             }
             return Point(width, height)
         }
@@ -421,8 +444,6 @@ class WebRtcHost(
 
         val sourceLong = maxOf(display.x, display.y).coerceAtLeast(2)
         val requested = customSurfaceMaxEdge.coerceIn(SURFACE_MIN_EDGE, SURFACE_MAX_EDGE)
-        // Permit up to 2x supersampling so a device that exposes 1200x540 logical metrics can be
-        // explicitly tested at 2400x1080. The aspect ratio always follows the current display.
         val scale = (requested.toDouble() / sourceLong.toDouble()).coerceIn(0.25, 2.0)
         val width = even((display.x * scale).toInt()).coerceAtLeast(2)
         val height = even((display.y * scale).toInt()).coerceAtLeast(2)
@@ -445,11 +466,9 @@ class WebRtcHost(
         }
         val display = physicalDisplaySize()
         val surface = captureSurfaceSize(display)
-        val baseWidth = surface.x
-        val baseHeight = surface.y
-        capturer.startCapture(baseWidth, baseHeight, BASE_CAPTURE_FPS)
-        baseCaptureWidth = baseWidth
-        baseCaptureHeight = baseHeight
+        capturer.startCapture(surface.x, surface.y, BASE_CAPTURE_FPS)
+        baseCaptureWidth = surface.x
+        baseCaptureHeight = surface.y
         lastDisplayWidth = display.x
         lastDisplayHeight = display.y
         displayRevision += 1L
@@ -512,7 +531,9 @@ class WebRtcHost(
     }
 
     private fun setCaptureProfileInternal(profile: String): Boolean {
-        val normalized = profile.lowercase().takeIf { it in setOf("auto", "economy", "balanced", "high", "fluid", "fluid60", "custom") } ?: return false
+        val normalized = profile.lowercase().takeIf {
+            it in setOf("auto", "economy", "balanced", "high", "fluid", "fluid60", "custom")
+        } ?: return false
         captureProfile = normalized
         if (normalized == "auto") autoTier = "balanced"
         applyOutputProfile()
@@ -558,8 +579,6 @@ class WebRtcHost(
             }
             "auto" -> when (autoTier) {
                 "economy" -> Triple(if (landscape) 960 else 720, 24, 250_000 to 1_800_000)
-                // Auto tops out at 45 FPS for frame integrity. 60 FPS remains available as the
-                // explicit Fluid 60/custom mode when the user knowingly wants the extra load.
                 "fluid" -> Triple(if (landscape) 1280 else 1080, 45, 600_000 to 6_500_000)
                 else -> Triple(if (landscape) 1280 else 1080, 30, 400_000 to 4_800_000)
             }
@@ -589,7 +608,11 @@ class WebRtcHost(
             val favorFps = captureProfile == "fluid60" || captureProfile == "fluid" ||
                 (captureProfile == "auto" && autoTier == "fluid") ||
                 (captureProfile == "custom" && spec.fps >= 50)
-            params.degradationPreference = if (favorFps) RtpParameters.DegradationPreference.MAINTAIN_FRAMERATE else RtpParameters.DegradationPreference.BALANCED
+            params.degradationPreference = if (favorFps) {
+                RtpParameters.DegradationPreference.MAINTAIN_FRAMERATE
+            } else {
+                RtpParameters.DegradationPreference.BALANCED
+            }
             params.encodings.forEach { encoding ->
                 encoding.minBitrateBps = spec.minBitrateBps
                 encoding.maxBitrateBps = spec.maxBitrateBps
@@ -606,7 +629,11 @@ class WebRtcHost(
 
     private fun capabilitiesJson(): JSONObject {
         val caps = SessionCapabilities.snapshot()
-        return JSONObject().put("screen", caps.screen).put("touch", caps.touch).put("keyboard", caps.keyboard).put("files", caps.files)
+        return JSONObject()
+            .put("screen", caps.screen)
+            .put("touch", caps.touch)
+            .put("keyboard", caps.keyboard)
+            .put("files", caps.files)
     }
 
     private fun sendCapabilities(channel: DataChannel? = controlChannel) {
@@ -620,21 +647,38 @@ class WebRtcHost(
         if (!controlAuthenticated || target.state() != DataChannel.State.OPEN) return
         val display = physicalDisplaySize()
         val spec = activeSpec
-        sendJson(target, JSONObject().put("type", "display_geometry")
-            .put("displayWidth", display.x).put("displayHeight", display.y)
-            .put("reportedCaptureWidth", reportedCaptureWidth).put("reportedCaptureHeight", reportedCaptureHeight)
-            .put("captureContentWidth", capturer.currentWidth()).put("captureContentHeight", capturer.currentHeight())
-            .put("captureDensityDpi", capturer.currentDensityDpi())
-            .put("captureSurfaceMode", captureSurfaceMode).put("customSurfaceMaxEdge", customSurfaceMaxEdge)
-            .put("orientation", orientationLabel(display)).put("streamWidth", spec?.width ?: 0).put("streamHeight", spec?.height ?: 0)
-            .put("streamFps", spec?.fps ?: 0).put("profile", captureProfile).put("autoTier", autoTier).put("revision", displayRevision))
+        sendJson(
+            target,
+            JSONObject()
+                .put("type", "display_geometry")
+                .put("displayWidth", display.x)
+                .put("displayHeight", display.y)
+                .put("reportedCaptureWidth", reportedCaptureWidth)
+                .put("reportedCaptureHeight", reportedCaptureHeight)
+                .put("captureContentWidth", capturer.currentWidth())
+                .put("captureContentHeight", capturer.currentHeight())
+                .put("captureDensityDpi", capturer.currentDensityDpi())
+                .put("captureSurfaceMode", captureSurfaceMode)
+                .put("customSurfaceMaxEdge", customSurfaceMaxEdge)
+                .put("orientation", orientationLabel(display))
+                .put("streamWidth", spec?.width ?: 0)
+                .put("streamHeight", spec?.height ?: 0)
+                .put("streamFps", spec?.fps ?: 0)
+                .put("profile", captureProfile)
+                .put("autoTier", autoTier)
+                .put("revision", displayRevision)
+        )
     }
 
     private fun observer() = object : PeerConnection.Observer {
         override fun onSignalingChange(newState: PeerConnection.SignalingState?) = Unit
-        override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState?) { iceState = newState?.name?.lowercase() ?: "unknown" }
+        override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState?) {
+            iceState = newState?.name?.lowercase() ?: "unknown"
+        }
         override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
-        override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState?) { gatheringState = newState?.name?.lowercase() ?: "unknown" }
+        override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState?) {
+            gatheringState = newState?.name?.lowercase() ?: "unknown"
+        }
         override fun onIceCandidate(candidate: IceCandidate?) {
             candidate ?: return
             localCandidateCount += 1
@@ -646,230 +690,478 @@ class WebRtcHost(
         override fun onDataChannel(channel: DataChannel?) {
             channel ?: return
             when (channel.label()) {
-                "control" -> { controlChannel = channel; controlAuthenticated = false; channel.registerObserver(controlObserver(channel)) }
-                "motion" -> { motionChannel = channel; motionAuthenticated = false; lastMotionSeq = 0L; channel.registerObserver(motionObserver(channel)) }
-                "file" -> { fileChannel = channel; fileAuthenticated = false; channel.registerObserver(fileObserver(channel)) }
-                else -> { try { channel.close() } catch (_: Exception) {}; try { channel.dispose() } catch (_: Exception) {} }
+                "control" -> {
+                    controlChannel = channel
+                    controlAuthenticated = false
+                    channel.registerObserver(controlObserver(channel))
+                }
+                "motion" -> {
+                    motionChannel = channel
+                    motionAuthenticated = false
+                    lastMotionSeq = 0L
+                    channel.registerObserver(motionObserver(channel))
+                }
+                "file" -> {
+                    fileChannel = channel
+                    fileAuthenticated = false
+                    channel.registerObserver(fileObserver(channel))
+                }
+                else -> {
+                    try { channel.close() } catch (_: Exception) {}
+                    try { channel.dispose() } catch (_: Exception) {}
+                }
             }
         }
         override fun onRenegotiationNeeded() = Unit
         override fun onAddTrack(receiver: RtpReceiver?, mediaStreams: Array<out MediaStream>?) = Unit
+
         override fun onConnectionChange(newState: PeerConnection.PeerConnectionState?) {
             peerState = newState?.name?.lowercase() ?: "unknown"
             if (newState == PeerConnection.PeerConnectionState.CONNECTED) {
-                applyCapabilities(); applySenderPolicy(); sendDisplayGeometry(); sendCapabilities()
+                applyCapabilities()
+                applySenderPolicy()
+                sendDisplayGeometry()
+                sendCapabilities()
             }
             if (newState == PeerConnection.PeerConnectionState.FAILED || newState == PeerConnection.PeerConnectionState.CLOSED) {
-                controlAuthenticated = false; motionAuthenticated = false; fileAuthenticated = false; pendingFileApproval = null; fileReceiver.cancel()
+                controlAuthenticated = false
+                motionAuthenticated = false
+                fileAuthenticated = false
+                pendingFileApproval = null
+                fileReceiver.cancel()
             }
         }
     }
 
     private fun controlObserver(channel: DataChannel) = object : DataChannel.Observer {
         override fun onBufferedAmountChange(previousAmount: Long) = Unit
-        override fun onStateChange() { if (channel.state() == DataChannel.State.OPEN) sendJson(channel, JSONObject().put("type", "hello").put("authRequired", true)) }
+        override fun onStateChange() {
+            if (channel.state() == DataChannel.State.OPEN) {
+                sendJson(channel, JSONObject().put("type", "hello").put("authRequired", true))
+            }
+        }
         override fun onMessage(buffer: DataChannel.Buffer?) {
             if (buffer == null || buffer.binary || buffer.data.remaining() > MAX_CONTROL_MESSAGE_BYTES) return
-            val bytes = ByteArray(buffer.data.remaining()); buffer.data.get(bytes); handleControlMessage(channel, bytes.toString(StandardCharsets.UTF_8))
+            val bytes = ByteArray(buffer.data.remaining())
+            buffer.data.get(bytes)
+            handleControlMessage(channel, bytes.toString(StandardCharsets.UTF_8))
         }
     }
 
     private fun motionObserver(channel: DataChannel) = object : DataChannel.Observer {
         override fun onBufferedAmountChange(previousAmount: Long) = Unit
-        override fun onStateChange() { if (channel.state() == DataChannel.State.OPEN) sendJson(channel, JSONObject().put("type", "hello").put("authRequired", true).put("channel", "motion")) }
+        override fun onStateChange() {
+            if (channel.state() == DataChannel.State.OPEN) {
+                sendJson(channel, JSONObject().put("type", "hello").put("authRequired", true).put("motion", true))
+            }
+            if (channel.state() == DataChannel.State.CLOSED) motionAuthenticated = false
+        }
         override fun onMessage(buffer: DataChannel.Buffer?) {
             if (buffer == null || buffer.binary || buffer.data.remaining() > MAX_MOTION_MESSAGE_BYTES) return
-            val bytes = ByteArray(buffer.data.remaining()); buffer.data.get(bytes); handleMotionMessage(channel, bytes.toString(StandardCharsets.UTF_8))
+            val bytes = ByteArray(buffer.data.remaining())
+            buffer.data.get(bytes)
+            val obj = try { JSONObject(bytes.toString(StandardCharsets.UTF_8)) } catch (_: Exception) { return }
+            if (obj.optString("type") == "auth") {
+                val ok = authenticate(obj.optString("token"))
+                motionAuthenticated = ok
+                lastMotionSeq = 0L
+                sendJson(channel, JSONObject().put("type", if (ok) "auth_ok" else "auth_failed").put("motion", true))
+                if (!ok) channel.close()
+                return
+            }
+            if (!motionAuthenticated || obj.optString("type") != "drag_move") return
+            if (!SessionCapabilities.canTouch()) return
+            val seq = obj.optLong("seq", -1L)
+            if (seq <= 0L || seq <= lastMotionSeq) return
+            lastMotionSeq = seq
+            touchHeartbeat()
+            RemoteAccessibilityService.instance?.dragMoveNormalized(
+                obj.optDouble("x").toFloat(), obj.optDouble("y").toFloat()
+            )
         }
     }
 
     private fun fileObserver(channel: DataChannel) = object : DataChannel.Observer {
         override fun onBufferedAmountChange(previousAmount: Long) = Unit
-        override fun onStateChange() { if (channel.state() == DataChannel.State.OPEN) sendJson(channel, JSONObject().put("type", "hello").put("authRequired", true).put("channel", "file")) }
+        override fun onStateChange() {
+            if (channel.state() == DataChannel.State.OPEN) {
+                sendJson(
+                    channel,
+                    JSONObject().put("type", "hello").put("authRequired", true)
+                        .put("maxFileBytes", IncomingFileReceiver.MAX_FILE_BYTES)
+                )
+            }
+            if (channel.state() == DataChannel.State.CLOSED) {
+                fileAuthenticated = false
+                pendingFileApproval = null
+                fileReceiver.cancel()
+            }
+        }
         override fun onMessage(buffer: DataChannel.Buffer?) {
-            if (buffer == null || buffer.data.remaining() > MAX_FILE_CHANNEL_MESSAGE_BYTES) return
-            if (buffer.binary) handleFileBinary(channel, buffer.data) else {
-                val bytes = ByteArray(buffer.data.remaining()); buffer.data.get(bytes); handleFileControl(channel, bytes.toString(StandardCharsets.UTF_8))
-            }
-        }
-    }
-
-    private fun handleControlMessage(channel: DataChannel, text: String) {
-        val obj = try { JSONObject(text) } catch (_: Exception) { return }
-        val type = obj.optString("type")
-        if (!controlAuthenticated) {
-            if (type != "auth") return
-            val provided = obj.optString("tokenHash")
-            val expected = expectedSessionHash
-            if (expected != null && constantTimeEquals(provided, expected)) {
-                controlAuthenticated = true; lastHeartbeatAt = System.currentTimeMillis()
-                sendJson(channel, JSONObject().put("type", "auth_ok").put("capabilities", capabilitiesJson()))
-                sendCapabilities(channel); sendDisplayGeometry(channel)
-            } else sendJson(channel, JSONObject().put("type", "auth_error"))
-            return
-        }
-        val seq = obj.optLong("seq", -1L)
-        if (seq <= lastCommandSeq) return
-        lastCommandSeq = seq
-        when (type) {
-            "ping" -> { lastHeartbeatAt = System.currentTimeMillis(); sendJson(channel, JSONObject().put("type", "pong").put("t", obj.optLong("t"))) }
-            "tap" -> if (SessionCapabilities.canTouch()) RemoteAccessibilityService.instance?.tapNormalized(obj.optDouble("x"), obj.optDouble("y"))
-            "drag_start" -> if (SessionCapabilities.canTouch()) RemoteAccessibilityService.instance?.dragStartNormalized(obj.optDouble("x"), obj.optDouble("y"))
-            "drag_move" -> if (SessionCapabilities.canTouch()) RemoteAccessibilityService.instance?.dragMoveNormalized(obj.optDouble("x"), obj.optDouble("y"))
-            "drag_end" -> if (SessionCapabilities.canTouch()) RemoteAccessibilityService.instance?.dragEndNormalized(obj.optDouble("x"), obj.optDouble("y"))
-            "drag_cancel" -> RemoteAccessibilityService.instance?.cancelRemoteDrag()
-            "swipe" -> if (SessionCapabilities.canTouch()) RemoteAccessibilityService.instance?.swipeNormalized(obj.optDouble("x1"), obj.optDouble("y1"), obj.optDouble("x2"), obj.optDouble("y2"), obj.optLong("durationMs", 220L))
-            "nav_back" -> if (SessionCapabilities.canTouch()) RemoteAccessibilityService.instance?.globalBack()
-            "nav_home" -> if (SessionCapabilities.canTouch()) RemoteAccessibilityService.instance?.globalHome()
-            "nav_recents" -> if (SessionCapabilities.canTouch()) RemoteAccessibilityService.instance?.globalRecents()
-            "input_text" -> if (SessionCapabilities.canKeyboard()) RemoteAccessibilityService.instance?.inputText(obj.optString("text").take(MAX_TEXT_LENGTH))
-            "key" -> if (SessionCapabilities.canKeyboard()) RemoteAccessibilityService.instance?.sendKey(obj.optString("key"), obj.optBoolean("ctrl", false), obj.optBoolean("shift", false), obj.optBoolean("alt", false))
-            "capture_geometry_refresh" -> { requestGeometryRepair(); sendJson(channel, JSONObject().put("type", "capture_geometry_refresh_result").put("ok", true)) }
-            "capture_surface" -> {
-                val ok = setCaptureSurfaceInternal(obj.optString("mode"), obj.optInt("maxEdge", customSurfaceMaxEdge))
-                sendJson(channel, JSONObject().put("type", "capture_surface_result").put("ok", ok)
-                    .put("mode", captureSurfaceMode).put("maxEdge", customSurfaceMaxEdge))
-            }
-            "capture_profile" -> {
-                val ok = setCaptureProfileInternal(obj.optString("profile"))
-                sendJson(channel, JSONObject().put("type", "capture_profile_result").put("ok", ok).put("profile", captureProfile).put("autoTier", autoTier))
-            }
-            "capture_auto_tier" -> {
-                val ok = setAutoTierInternal(obj.optString("tier"))
-                sendJson(channel, JSONObject().put("type", "capture_auto_tier_result").put("ok", ok).put("profile", captureProfile).put("autoTier", autoTier))
-            }
-            "capture_custom" -> {
-                val ok = setCustomCaptureInternal(obj.optInt("maxEdge", -1), obj.optInt("fps", -1), obj.optInt("maxBitrateBps", -1))
-                sendJson(channel, JSONObject().put("type", "capture_custom_result").put("ok", ok).put("profile", captureProfile))
-            }
-        }
-    }
-
-    private fun handleMotionMessage(channel: DataChannel, text: String) {
-        val obj = try { JSONObject(text) } catch (_: Exception) { return }
-        val type = obj.optString("type")
-        if (!motionAuthenticated) {
-            if (type != "auth") return
-            val provided = obj.optString("tokenHash")
-            val expected = expectedSessionHash
-            if (expected != null && constantTimeEquals(provided, expected)) { motionAuthenticated = true; sendJson(channel, JSONObject().put("type", "auth_ok").put("channel", "motion")) }
-            else sendJson(channel, JSONObject().put("type", "auth_error").put("channel", "motion"))
-            return
-        }
-        if (type != "drag_move" || !SessionCapabilities.canTouch()) return
-        val seq = obj.optLong("seq", -1L)
-        if (seq <= lastMotionSeq) return
-        lastMotionSeq = seq
-        RemoteAccessibilityService.instance?.dragMoveNormalized(obj.optDouble("x"), obj.optDouble("y"))
-    }
-
-    private fun handleFileControl(channel: DataChannel, text: String) {
-        val obj = try { JSONObject(text) } catch (_: Exception) { return }
-        val type = obj.optString("type")
-        if (!fileAuthenticated) {
-            if (type != "auth") return
-            val provided = obj.optString("tokenHash")
-            val expected = expectedSessionHash
-            if (expected != null && constantTimeEquals(provided, expected)) { fileAuthenticated = true; sendJson(channel, JSONObject().put("type", "auth_ok").put("channel", "file")) }
-            else sendJson(channel, JSONObject().put("type", "auth_error").put("channel", "file"))
-            return
-        }
-        if (!SessionCapabilities.canReceiveFiles()) { sendJson(channel, JSONObject().put("type", "file_error").put("error", "capability_denied")); return }
-        when (type) {
-            "file_start" -> {
-                val request = FileApprovalRequest(obj.optString("id"), obj.optString("name"), obj.optString("mime", "application/octet-stream"), obj.optLong("size", -1L))
-                if (!validFileRequest(request)) { sendJson(channel, JSONObject().put("type", "file_error").put("id", request.id).put("error", "invalid_request")); return }
-                synchronized(lock) {
-                    if (pendingFileApproval != null || fileReceiver.isActive()) { sendJson(channel, JSONObject().put("type", "file_error").put("id", request.id).put("error", "busy")); return }
-                    pendingFileApproval = PendingFileApproval(request, channel)
+            buffer ?: return
+            if (buffer.binary) {
+                if (
+                    !fileAuthenticated || !SessionCapabilities.canReceiveFiles() ||
+                    pendingFileApproval != null || fileReceiver.progress() == null ||
+                    buffer.data.remaining() > IncomingFileReceiver.MAX_CHUNK_BYTES
+                ) {
+                    if (!SessionCapabilities.canReceiveFiles()) fileReceiver.cancel()
+                    return
                 }
-                onFileApprovalRequested(request); sendJson(channel, JSONObject().put("type", "file_pending_approval").put("id", request.id))
+                val bytes = ByteArray(buffer.data.remaining())
+                buffer.data.get(bytes)
+                val error = fileReceiver.append(bytes)
+                if (error != null) {
+                    fileReceiver.cancel()
+                    sendJson(channel, JSONObject().put("type", "file_error").put("error", error))
+                }
+                return
+            }
+            if (buffer.data.remaining() > MAX_CONTROL_MESSAGE_BYTES) return
+            val bytes = ByteArray(buffer.data.remaining())
+            buffer.data.get(bytes)
+            handleFileMessage(channel, bytes.toString(StandardCharsets.UTF_8))
+        }
+    }
+
+    private fun authenticate(supplied: String): Boolean {
+        val expected = expectedSessionHash
+        return supplied.length in 32..128 && expected != null && constantTimeEquals(expected, sha256Hex(supplied))
+    }
+
+    private fun touchHeartbeat() {
+        lastHeartbeatAt = System.currentTimeMillis()
+    }
+
+    private fun handleControlMessage(channel: DataChannel, raw: String) {
+        val obj = try { JSONObject(raw) } catch (_: Exception) { return }
+        when (obj.optString("type")) {
+            "auth" -> {
+                val ok = authenticate(obj.optString("token"))
+                controlAuthenticated = ok
+                lastCommandSeq = 0L
+                if (ok) touchHeartbeat()
+                sendJson(
+                    channel,
+                    JSONObject()
+                        .put("type", if (ok) "auth_ok" else "auth_failed")
+                        .put("controlReady", RemoteAccessibilityService.instance != null && SessionCapabilities.canTouch())
+                        .put("capabilities", capabilitiesJson())
+                )
+                if (ok) {
+                    sendDisplayGeometry(channel)
+                    sendCapabilities(channel)
+                } else channel.close()
+            }
+            "ping" -> if (controlAuthenticated) {
+                touchHeartbeat()
+                sendJson(channel, JSONObject().put("type", "pong").put("id", obj.optLong("id")))
+            }
+            else -> {
+                if (!controlAuthenticated) return
+                touchHeartbeat()
+                val seq = obj.optLong("seq", -1L)
+                if (seq <= 0L || seq <= lastCommandSeq) return
+                lastCommandSeq = seq
+                when (obj.optString("type")) {
+                    "capture_surface" -> {
+                        val ok = setCaptureSurfaceInternal(
+                            obj.optString("mode"),
+                            obj.optInt("maxEdge", customSurfaceMaxEdge)
+                        )
+                        sendJson(
+                            channel,
+                            JSONObject().put("type", "capture_surface_result").put("ok", ok)
+                                .put("mode", captureSurfaceMode).put("maxEdge", customSurfaceMaxEdge)
+                        )
+                    }
+                    "capture_profile" -> {
+                        val ok = setCaptureProfileInternal(obj.optString("profile"))
+                        sendJson(
+                            channel,
+                            JSONObject().put("type", "capture_profile_result").put("ok", ok)
+                                .put("profile", captureProfile).put("autoTier", autoTier)
+                        )
+                    }
+                    "capture_auto_tier" -> {
+                        val ok = setAutoTierInternal(obj.optString("tier"))
+                        sendJson(
+                            channel,
+                            JSONObject().put("type", "capture_auto_tier_result").put("ok", ok)
+                                .put("profile", captureProfile).put("autoTier", autoTier)
+                        )
+                    }
+                    "capture_custom" -> {
+                        val ok = setCustomCaptureInternal(
+                            obj.optInt("maxEdge", -1),
+                            obj.optInt("fps", -1),
+                            obj.optInt("maxBitrateBps", -1)
+                        )
+                        val c = customCapture
+                        sendJson(
+                            channel,
+                            JSONObject().put("type", "capture_custom_result").put("ok", ok)
+                                .put("profile", captureProfile)
+                                .put("maxEdge", c.maxEdge).put("fps", c.fps)
+                                .put("maxBitrateBps", c.maxBitrateBps)
+                        )
+                    }
+                    "capture_geometry_refresh" -> {
+                        requestGeometryRepair()
+                        sendJson(channel, JSONObject().put("type", "capture_geometry_refresh_result").put("ok", true))
+                    }
+                    else -> dispatchControl(obj, channel)
+                }
+            }
+        }
+    }
+
+    private fun handleFileMessage(channel: DataChannel, raw: String) {
+        val obj = try { JSONObject(raw) } catch (_: Exception) { return }
+        when (obj.optString("type")) {
+            "auth" -> {
+                val ok = authenticate(obj.optString("token"))
+                fileAuthenticated = ok
+                sendJson(
+                    channel,
+                    JSONObject().put("type", if (ok) "auth_ok" else "auth_failed")
+                        .put("maxFileBytes", IncomingFileReceiver.MAX_FILE_BYTES)
+                        .put("filesAllowed", SessionCapabilities.canReceiveFiles())
+                )
+                if (!ok) channel.close()
+            }
+            "file_begin" -> {
+                if (!fileAuthenticated) return
+                if (!SessionCapabilities.canReceiveFiles()) {
+                    sendJson(
+                        channel,
+                        JSONObject().put("type", "file_error").put("id", obj.optString("id")).put("error", "capability_denied")
+                    )
+                    return
+                }
+                if (pendingFileApproval != null) {
+                    sendJson(
+                        channel,
+                        JSONObject().put("type", "file_error").put("id", obj.optString("id")).put("error", "approval_pending")
+                    )
+                    return
+                }
+                val request = FileApprovalRequest(
+                    id = obj.optString("id"),
+                    name = obj.optString("name"),
+                    mime = obj.optString("mime"),
+                    size = obj.optLong("size", -1L)
+                )
+                val error = fileReceiver.validateRequest(request.id, request.name, request.mime, request.size)
+                if (error != null) {
+                    sendJson(channel, JSONObject().put("type", "file_error").put("id", request.id).put("error", error))
+                    return
+                }
+                pendingFileApproval = PendingFileApproval(request, channel)
+                sendJson(
+                    channel,
+                    JSONObject().put("type", "file_pending").put("id", request.id).put("approvalRequired", true)
+                )
+                onFileApprovalRequested(request)
             }
             "file_end" -> {
+                if (!fileAuthenticated || !SessionCapabilities.canReceiveFiles() || pendingFileApproval != null) {
+                    fileReceiver.cancel()
+                    return
+                }
                 val id = obj.optString("id")
                 val result = fileReceiver.finish(id)
-                if (result != null) sendJson(channel, JSONObject().put("type", "file_complete").put("id", id).put("uri", result))
-                else sendJson(channel, JSONObject().put("type", "file_error").put("id", id).put("error", "finish_failed"))
+                result.onSuccess { saved ->
+                    sendJson(
+                        channel,
+                        JSONObject().put("type", "file_saved").put("id", id).put("name", saved.name)
+                            .put("location", saved.location).put("size", saved.size)
+                    )
+                }.onFailure { error ->
+                    fileReceiver.cancel()
+                    sendJson(
+                        channel,
+                        JSONObject().put("type", "file_error").put("id", id)
+                            .put("error", error.message ?: "save_failed")
+                    )
+                }
             }
-            "file_cancel" -> { fileReceiver.cancel(); sendJson(channel, JSONObject().put("type", "file_cancelled").put("id", obj.optString("id"))) }
+            "file_cancel" -> {
+                val id = obj.optString("id")
+                if (pendingFileApproval?.request?.id == id) pendingFileApproval = null
+                fileReceiver.cancel()
+                sendJson(channel, JSONObject().put("type", "file_cancelled").put("id", id))
+            }
         }
     }
 
-    private fun handleFileBinary(channel: DataChannel, buffer: ByteBuffer) {
-        if (!fileAuthenticated || !SessionCapabilities.canReceiveFiles()) return
-        if (buffer.remaining() <= 0 || buffer.remaining() > MAX_FILE_CHUNK_BYTES) return
-        val bytes = ByteArray(buffer.remaining()); buffer.get(bytes)
-        val error = fileReceiver.append(bytes)
-        if (error != null) sendJson(channel, JSONObject().put("type", "file_error").put("error", error))
-    }
+    private fun dispatchControl(obj: JSONObject, channel: DataChannel) {
+        val type = obj.optString("type")
+        val touchAction = type in TOUCH_ACTIONS
+        val keyboardAction = type in KEYBOARD_ACTIONS
 
-    private fun validFileRequest(request: FileApprovalRequest): Boolean {
-        if (!request.id.matches(Regex("^[A-Za-z0-9._:-]{8,80}$"))) return false
-        if (request.name.isBlank() || request.name.length > 180 || request.name.contains('/') || request.name.contains('\\')) return false
-        if (request.size !in 1..MAX_FILE_BYTES) return false
-        return true
-    }
+        if (touchAction && !SessionCapabilities.canTouch()) {
+            RemoteAccessibilityService.instance?.cancelRemoteDrag()
+            sendJson(
+                channel,
+                JSONObject().put("type", "control_error").put("error", "capability_denied")
+                    .put("capability", "touch")
+            )
+            return
+        }
+        if (keyboardAction && !SessionCapabilities.canUseKeyboard()) {
+            sendJson(
+                channel,
+                JSONObject().put("type", "control_error").put("error", "capability_denied")
+                    .put("capability", "keyboard")
+            )
+            return
+        }
 
-    private fun isCurrentSession(hash: String): Boolean = expectedSessionHash != null && constantTimeEquals(expectedSessionHash!!, hash)
+        val service = RemoteAccessibilityService.instance ?: run {
+            sendJson(channel, JSONObject().put("type", "control_error").put("error", "accessibility_disabled"))
+            return
+        }
 
-    private fun closePeerLocked() {
-        controlAuthenticated = false; motionAuthenticated = false; fileAuthenticated = false; lastCommandSeq = 0L; lastMotionSeq = 0L; lastHeartbeatAt = 0L
-        pendingFileApproval = null; fileReceiver.cancel(); RemoteAccessibilityService.instance?.cancelRemoteDrag()
-        try { controlChannel?.close() } catch (_: Exception) {}; try { controlChannel?.dispose() } catch (_: Exception) {}; controlChannel = null
-        try { motionChannel?.close() } catch (_: Exception) {}; try { motionChannel?.dispose() } catch (_: Exception) {}; motionChannel = null
-        try { fileChannel?.close() } catch (_: Exception) {}; try { fileChannel?.dispose() } catch (_: Exception) {}; fileChannel = null
-        try { peer?.close() } catch (_: Exception) {}; try { peer?.dispose() } catch (_: Exception) {}; peer = null; videoSender = null
-        expectedSessionHash = null; localCandidates.clear(); peerState = "closed"; iceState = "closed"; gatheringState = "closed"
-    }
-
-    private fun createAnswerBlocking(pc: PeerConnection): SessionDescription {
-        val latch = CountDownLatch(1); var result: SessionDescription? = null; var failure: String? = null
-        pc.createAnswer(object : SdpObserver {
-            override fun onCreateSuccess(desc: SessionDescription?) { result = desc; latch.countDown() }
-            override fun onSetSuccess() = Unit
-            override fun onCreateFailure(error: String?) { failure = error; latch.countDown() }
-            override fun onSetFailure(error: String?) = Unit
-        }, MediaConstraints())
-        check(latch.await(SDP_TIMEOUT_SECONDS, TimeUnit.SECONDS)) { "Timeout ao criar answer" }
-        failure?.let { error(it) }; return result ?: error("Answer WebRTC ausente")
-    }
-
-    private fun setRemoteDescriptionBlocking(pc: PeerConnection, desc: SessionDescription) = setDescriptionBlocking { observer -> pc.setRemoteDescription(observer, desc) }
-    private fun setLocalDescriptionBlocking(pc: PeerConnection, desc: SessionDescription) = setDescriptionBlocking { observer -> pc.setLocalDescription(observer, desc) }
-    private fun setDescriptionBlocking(action: (SdpObserver) -> Unit) {
-        val latch = CountDownLatch(1); var failure: String? = null
-        action(object : SdpObserver {
-            override fun onCreateSuccess(desc: SessionDescription?) = Unit
-            override fun onSetSuccess() { latch.countDown() }
-            override fun onCreateFailure(error: String?) = Unit
-            override fun onSetFailure(error: String?) { failure = error; latch.countDown() }
-        })
-        check(latch.await(SDP_TIMEOUT_SECONDS, TimeUnit.SECONDS)) { "Timeout ao aplicar SDP" }; failure?.let { error(it) }
+        val ok = when (type) {
+            "tap" -> service.tapNormalized(obj.optDouble("x").toFloat(), obj.optDouble("y").toFloat())
+            "swipe" -> service.swipeNormalized(
+                obj.optDouble("x1").toFloat(), obj.optDouble("y1").toFloat(),
+                obj.optDouble("x2").toFloat(), obj.optDouble("y2").toFloat(),
+                obj.optLong("duration", 180L)
+            )
+            "drag_start" -> service.dragStartNormalized(obj.optDouble("x").toFloat(), obj.optDouble("y").toFloat())
+            "drag_move" -> service.dragMoveNormalized(obj.optDouble("x").toFloat(), obj.optDouble("y").toFloat())
+            "drag_end" -> service.dragEndNormalized(obj.optDouble("x").toFloat(), obj.optDouble("y").toFloat())
+            "drag_cancel" -> { service.cancelRemoteDrag(); true }
+            "back" -> service.back()
+            "home" -> service.home()
+            "recents" -> service.recents()
+            "text" -> service.setFocusedText(obj.optString("text"))
+            "key_text" -> service.insertFocusedText(obj.optString("text"))
+            "key_backspace" -> service.deleteFocusedText(backward = true)
+            "key_delete" -> service.deleteFocusedText(backward = false)
+            "key_cursor" -> service.moveFocusedCursor(obj.optString("direction"))
+            "key_select_all" -> service.selectAllFocusedText()
+            "key_enter" -> service.pressFocusedEnter()
+            else -> false
+        }
+        if (!ok) sendJson(channel, JSONObject().put("type", "control_error").put("error", "action_failed"))
     }
 
     private fun sendJson(channel: DataChannel, obj: JSONObject) {
         if (channel.state() != DataChannel.State.OPEN) return
-        val bytes = obj.toString().toByteArray(StandardCharsets.UTF_8)
-        try { channel.send(DataChannel.Buffer(ByteBuffer.wrap(bytes), false)) } catch (_: Exception) {}
+        try {
+            channel.send(
+                DataChannel.Buffer(
+                    ByteBuffer.wrap(obj.toString().toByteArray(StandardCharsets.UTF_8)),
+                    false
+                )
+            )
+        } catch (_: Exception) {}
     }
 
-    private fun constantTimeEquals(a: String, b: String): Boolean = MessageDigest.isEqual(a.toByteArray(StandardCharsets.UTF_8), b.toByteArray(StandardCharsets.UTF_8))
+    private fun closePeerLocked() {
+        RemoteAccessibilityService.instance?.cancelRemoteDrag()
+        fileReceiver.cancel()
+        pendingFileApproval = null
+        controlAuthenticated = false
+        motionAuthenticated = false
+        fileAuthenticated = false
+        lastCommandSeq = 0L
+        lastMotionSeq = 0L
+        lastHeartbeatAt = 0L
+        peerState = "closed"
+        iceState = "closed"
+        gatheringState = "complete"
+        listOf(controlChannel, motionChannel, fileChannel).forEach { channel ->
+            try { channel?.unregisterObserver() } catch (_: Exception) {}
+            try { channel?.close() } catch (_: Exception) {}
+            try { channel?.dispose() } catch (_: Exception) {}
+        }
+        controlChannel = null
+        motionChannel = null
+        fileChannel = null
+        videoSender = null
+        try { peer?.close() } catch (_: Exception) {}
+        try { peer?.dispose() } catch (_: Exception) {}
+        peer = null
+        expectedSessionHash = null
+        localCandidates.clear()
+        localCandidateCount = 0
+    }
+
+    private fun isCurrentSession(hash: String): Boolean =
+        expectedSessionHash?.let { constantTimeEquals(it, hash) } == true
+
+    private fun setRemoteDescriptionBlocking(pc: PeerConnection, description: SessionDescription) {
+        val observer = BlockingSdpObserver()
+        pc.setRemoteDescription(observer, description)
+        observer.await("setRemoteDescription")
+    }
+
+    private fun createAnswerBlocking(pc: PeerConnection): SessionDescription {
+        val observer = BlockingSdpObserver()
+        pc.createAnswer(observer, MediaConstraints())
+        return observer.awaitDescription("createAnswer")
+    }
+
+    private fun setLocalDescriptionBlocking(pc: PeerConnection, description: SessionDescription) {
+        val observer = BlockingSdpObserver()
+        pc.setLocalDescription(observer, description)
+        observer.await("setLocalDescription")
+    }
+
+    private class BlockingSdpObserver : SdpObserver {
+        private val latch = CountDownLatch(1)
+        @Volatile private var description: SessionDescription? = null
+        @Volatile private var failure: String? = null
+
+        override fun onCreateSuccess(desc: SessionDescription?) {
+            description = desc
+            latch.countDown()
+        }
+        override fun onSetSuccess() {
+            latch.countDown()
+        }
+        override fun onCreateFailure(message: String?) {
+            failure = message ?: "SDP create failure"
+            latch.countDown()
+        }
+        override fun onSetFailure(message: String?) {
+            failure = message ?: "SDP set failure"
+            latch.countDown()
+        }
+
+        fun await(operation: String) {
+            if (!latch.await(10, TimeUnit.SECONDS)) error("$operation excedeu o tempo limite")
+            failure?.let { error("$operation: $it") }
+        }
+
+        fun awaitDescription(operation: String): SessionDescription {
+            await(operation)
+            return description ?: error("$operation não retornou SDP")
+        }
+    }
+
+    private fun sha256Hex(value: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray(StandardCharsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+
+    private fun constantTimeEquals(a: String, b: String): Boolean =
+        MessageDigest.isEqual(a.toByteArray(StandardCharsets.UTF_8), b.toByteArray(StandardCharsets.UTF_8))
 
     companion object {
-        private const val TAG = "RemoteLink-WebRTC"
-        private const val BASE_CAPTURE_FPS = 60
+        private const val TAG = "RemoteLinkWebRtc"
         private const val MAX_CONTROL_MESSAGE_BYTES = 16 * 1024
         private const val MAX_MOTION_MESSAGE_BYTES = 2 * 1024
-        private const val MAX_FILE_CHANNEL_MESSAGE_BYTES = 96 * 1024
-        private const val MAX_FILE_CHUNK_BYTES = 64 * 1024
-        private const val MAX_FILE_BYTES = 100L * 1024L * 1024L
-        private const val MAX_TEXT_LENGTH = 4000
-        private const val FILE_APPROVAL_TIMEOUT_MS = 60_000L
+        private const val BASE_CAPTURE_FPS = 60
+        private const val DISPLAY_CHANGE_DEBOUNCE_MS = 80L
+        private const val ROTATION_VERIFY_DELAY_MS = 420L
         private const val WATCHDOG_INTERVAL_MS = 5_000L
-        private const val WATCHDOG_TIMEOUT_MS = 20_000L
-        private const val SDP_TIMEOUT_SECONDS = 8L
-        private const val DISPLAY_CHANGE_DEBOUNCE_MS = 90L
-        private const val ROTATION_VERIFY_DELAY_MS = 550L
+        private const val WATCHDOG_TIMEOUT_MS = 30_000L
+        private const val FILE_APPROVAL_TIMEOUT_MS = 30_000L
         private const val CUSTOM_MIN_EDGE = 480
         private const val CUSTOM_MAX_EDGE = 2560
         private const val CUSTOM_MIN_FPS = 15
@@ -879,6 +1171,15 @@ class WebRtcHost(
         private const val SURFACE_MIN_EDGE = 480
         private const val SURFACE_MAX_EDGE = 4096
         private const val SURFACE_MAX_PIXELS = 12_600_000L
+
+        private val TOUCH_ACTIONS = setOf(
+            "tap", "swipe", "drag_start", "drag_move", "drag_end", "drag_cancel",
+            "back", "home", "recents"
+        )
+        private val KEYBOARD_ACTIONS = setOf(
+            "text", "key_text", "key_backspace", "key_delete", "key_cursor",
+            "key_select_all", "key_enter"
+        )
         private val factoryInitialized = AtomicBoolean(false)
     }
 }
