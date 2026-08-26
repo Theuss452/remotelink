@@ -87,6 +87,8 @@ class WebRtcHost(
     @Volatile private var customCapture = CustomCaptureConfig(1280, 30, 4_800_000)
     @Volatile private var captureSurfaceMode = "auto"
     @Volatile private var customSurfaceMaxEdge = 2400
+    @Volatile private var reportedCaptureWidth = 0
+    @Volatile private var reportedCaptureHeight = 0
     @Volatile private var activeSpec: CaptureSpec? = null
     @Volatile private var peerState = "new"
     @Volatile private var iceState = "new"
@@ -162,6 +164,8 @@ class WebRtcHost(
             object : MediaProjection.Callback() {
                 override fun onCapturedContentResize(width: Int, height: Int) {
                     if (width <= 1 || height <= 1) return
+                    reportedCaptureWidth = even(width)
+                    reportedCaptureHeight = even(height)
                     forceGeometryRefresh = true
                     scheduleGeometryRefresh(0L)
                 }
@@ -171,6 +175,8 @@ class WebRtcHost(
                     activeSpec = null
                     baseCaptureWidth = 0
                     baseCaptureHeight = 0
+                    reportedCaptureWidth = 0
+                    reportedCaptureHeight = 0
                     onProjectionStopped()
                 }
             }
@@ -267,6 +273,8 @@ class WebRtcHost(
             .put("maxBitrateBps", spec?.maxBitrateBps ?: 0)
             .put("displayWidth", display.x)
             .put("displayHeight", display.y)
+            .put("reportedCaptureWidth", reportedCaptureWidth)
+            .put("reportedCaptureHeight", reportedCaptureHeight)
             .put("captureContentWidth", capturer.currentWidth())
             .put("captureContentHeight", capturer.currentHeight())
             .put("captureDensityDpi", capturer.currentDensityDpi())
@@ -355,6 +363,8 @@ class WebRtcHost(
             activeSpec = null
             baseCaptureWidth = 0
             baseCaptureHeight = 0
+            reportedCaptureWidth = 0
+            reportedCaptureHeight = 0
             try { capturer.dispose() } catch (_: Exception) {}
             try { textureHelper.dispose() } catch (_: Exception) {}
             try { videoTrack.dispose() } catch (_: Exception) {}
@@ -401,13 +411,19 @@ class WebRtcHost(
     }
 
     private fun captureSurfaceSize(display: Point): Point {
-        if (captureSurfaceMode != "custom") return Point(even(display.x), even(display.y))
+        if (captureSurfaceMode == "auto") {
+            val reported = Point(reportedCaptureWidth, reportedCaptureHeight)
+            val validReported = reported.x > 1 && reported.y > 1 &&
+                orientationLabel(reported) == orientationLabel(display)
+            if (validReported) return Point(even(reported.x), even(reported.y))
+            return Point(even(display.x), even(display.y))
+        }
 
         val sourceLong = maxOf(display.x, display.y).coerceAtLeast(2)
         val requested = customSurfaceMaxEdge.coerceIn(SURFACE_MIN_EDGE, SURFACE_MAX_EDGE)
         // Permit up to 2x supersampling so a device that exposes 1200x540 logical metrics can be
-        // explicitly tested at 2400x1080. Preventing unbounded upscaling protects memory/encoder.
-        val scale = (requested.toDouble() / sourceLong.toDouble()).coerceIn(0.5, 2.0)
+        // explicitly tested at 2400x1080. The aspect ratio always follows the current display.
+        val scale = (requested.toDouble() / sourceLong.toDouble()).coerceIn(0.25, 2.0)
         val width = even((display.x * scale).toInt()).coerceAtLeast(2)
         val height = even((display.y * scale).toInt()).coerceAtLeast(2)
         val pixels = width.toLong() * height.toLong()
@@ -606,6 +622,7 @@ class WebRtcHost(
         val spec = activeSpec
         sendJson(target, JSONObject().put("type", "display_geometry")
             .put("displayWidth", display.x).put("displayHeight", display.y)
+            .put("reportedCaptureWidth", reportedCaptureWidth).put("reportedCaptureHeight", reportedCaptureHeight)
             .put("captureContentWidth", capturer.currentWidth()).put("captureContentHeight", capturer.currentHeight())
             .put("captureDensityDpi", capturer.currentDensityDpi())
             .put("captureSurfaceMode", captureSurfaceMode).put("customSurfaceMaxEdge", customSurfaceMaxEdge)
