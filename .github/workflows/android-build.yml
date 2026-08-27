@@ -1,4 +1,4 @@
-name: Build RemoteLink v0.9.9-alpha
+name: Build RemoteLink v0.9.10-alpha
 
 on:
   push:
@@ -43,13 +43,20 @@ jobs:
       - name: Build direct debug APK
         run: |
           gradle --no-daemon --stacktrace assembleDirectDebug
-          cp app/build/outputs/apk/direct/debug/app-direct-debug.apk RemoteLink-v0.9.9-alpha-direct-debug.apk
+          cp app/build/outputs/apk/direct/debug/app-direct-debug.apk RemoteLink-v0.9.10-alpha-direct-debug.apk
       - uses: actions/upload-artifact@v4
-        with: {name: RemoteLink-v0.9.9-alpha-direct-debug, path: RemoteLink-v0.9.9-alpha-direct-debug.apk, retention-days: 14}
+        with:
+          name: RemoteLink-v0.9.10-alpha-direct-debug
+          path: RemoteLink-v0.9.10-alpha-direct-debug.apk
+          retention-days: 14
       - name: Check release signing configuration
         id: signing
         run: |
-          if [[ -n "$ANDROID_KEYSTORE_BASE64" && -n "$ANDROID_KEYSTORE_PASSWORD" && -n "$ANDROID_KEY_ALIAS" && -n "$ANDROID_KEY_PASSWORD" ]]; then echo "enabled=true" >> "$GITHUB_OUTPUT"; else echo "enabled=false" >> "$GITHUB_OUTPUT"; fi
+          if [[ -n "$ANDROID_KEYSTORE_BASE64" && -n "$ANDROID_KEYSTORE_PASSWORD" && -n "$ANDROID_KEY_ALIAS" && -n "$ANDROID_KEY_PASSWORD" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Restore release keystore
         if: steps.signing.outputs.enabled == 'true'
         run: |
@@ -60,29 +67,29 @@ jobs:
         if: steps.signing.outputs.enabled == 'true'
         run: |
           gradle --no-daemon --stacktrace assembleDirectRelease bundlePlayRelease
-          cp app/build/outputs/apk/direct/release/app-direct-release.apk RemoteLink-v0.9.9-alpha-release.apk
-          cp app/build/outputs/bundle/playRelease/app-play-release.aab RemoteLink-v0.9.9-alpha-play.aab
+          cp app/build/outputs/apk/direct/release/app-direct-release.apk RemoteLink-v0.9.10-alpha-release.apk
+          cp app/build/outputs/bundle/playRelease/app-play-release.aab RemoteLink-v0.9.10-alpha-play.aab
       - name: Verify release APK signature
         if: steps.signing.outputs.enabled == 'true'
         run: |
           APKSIGNER="$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner"
           [[ -x "$APKSIGNER" ]] || APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -maxdepth 2 -type f -name apksigner -perm -111 | sort -V | tail -n 1)"
           [[ -n "$APKSIGNER" && -x "$APKSIGNER" ]] || { echo "apksigner não encontrado" >&2; exit 1; }
-          "$APKSIGNER" verify --verbose --print-certs RemoteLink-v0.9.9-alpha-release.apk
+          "$APKSIGNER" verify --verbose --print-certs RemoteLink-v0.9.10-alpha-release.apk
       - name: Generate update manifest
         if: steps.signing.outputs.enabled == 'true'
         run: |
           python3 - <<'PY'
           import json, os, hashlib
-          name='RemoteLink-v0.9.9-alpha-release.apk'
+          name='RemoteLink-v0.9.10-alpha-release.apk'
           sha=hashlib.sha256(open(name,'rb').read()).hexdigest()
           data={
             'packageName':'app.remotelink',
-            'versionCode':24,
-            'versionName':'0.9.9-alpha',
+            'versionCode':25,
+            'versionName':'0.9.10-alpha',
             'apkUrl':os.environ.get('REMOTELINK_DIRECT_APK_URL','').strip(),
             'sha256':sha,
-            'notes':'RemoteLink v0.9.9-alpha: corrige retorno landscape→portrait sem precisar alterar manualmente a qualidade/tamanho, força refresh automático do encoder e do viewer durante a rotação, melhora frame pacing, considera drops na adaptação de qualidade e reduz a fila alvo de reprodução sem voltar ao buffer zero.'
+            'notes':'RemoteLink v0.9.10-alpha: corrige o retorno landscape→portrait usando a geometria confirmada pelo MediaProjection como autoridade do encoder; remove múltiplas reconfigurações durante rotação; fixa resolução durante congestionamento e reduz FPS antes de reescalar, diminuindo artefatos/tearing em movimento rápido; aumenta o piso de bitrate no modo Balanceado e mantém fallback adaptativo para redes pressionadas.'
           }
           open('updates.json','w',encoding='utf-8').write(json.dumps(data,ensure_ascii=False,indent=2)+'\n')
           PY
@@ -90,9 +97,9 @@ jobs:
         if: steps.signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: RemoteLink-v0.9.9-alpha-signed-release
+          name: RemoteLink-v0.9.10-alpha-signed-release
           path: |
-            RemoteLink-v0.9.9-alpha-release.apk
-            RemoteLink-v0.9.9-alpha-play.aab
+            RemoteLink-v0.9.10-alpha-release.apk
+            RemoteLink-v0.9.10-alpha-play.aab
             updates.json
           retention-days: 30
