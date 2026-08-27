@@ -16,34 +16,44 @@
   let goodQualityWindows = 0;
   let lastProfileChangeAt = 0;
   let frameCanvasMismatch = false;
-  let orientationEpoch = 0;
 
+  // Do not force a browser-side codec order. Let WebRTC negotiate with the Android
+  // hardware encoder and keep this module focused on pacing/geometry.
   preferHardwareFriendlyVideoCodec = function() {};
 
   function physicalOrientation() {
     if (lastStableOrientation !== 'unknown') return lastStableOrientation;
-    if (remoteGeometry?.orientation && remoteGeometry.orientation !== 'unknown') return remoteGeometry.orientation;
-    const vw = Number(el.video.videoWidth || 0), vh = Number(el.video.videoHeight || 0);
+    if (remoteGeometry?.orientation && remoteGeometry.orientation !== 'unknown') {
+      return remoteGeometry.orientation;
+    }
+    const vw = Number(el.video.videoWidth || 0);
+    const vh = Number(el.video.videoHeight || 0);
     return vw && vh ? (vw > vh ? 'landscape' : 'portrait') : 'unknown';
+  }
+
+  function clearTransientViewerState() {
+    frameCanvasMismatch = false;
+    el.stage.classList.remove(
+      'frame-letterbox-fix',
+      'aspect-20-9',
+      'aspect-19-5-9',
+      'aspect-16-9',
+      'aspect-4-3'
+    );
+    document.documentElement.classList.remove('frame-letterbox-fix');
   }
 
   function setAspectClass() {
     el.stage.classList.remove('aspect-20-9','aspect-19-5-9','aspect-16-9','aspect-4-3');
     if (physicalOrientation() !== 'landscape') return;
-    const w = Number(remoteGeometry?.displayWidth || 0);
-    const h = Number(remoteGeometry?.displayHeight || 0);
-    const ratio = w > 0 && h > 0 ? Math.max(w,h) / Math.min(w,h) : 20 / 9;
+
+    const w = Number(remoteGeometry?.captureContentWidth || remoteGeometry?.displayWidth || 0);
+    const h = Number(remoteGeometry?.captureContentHeight || remoteGeometry?.displayHeight || 0);
+    const ratio = w > 0 && h > 0 ? Math.max(w, h) / Math.min(w, h) : 20 / 9;
     if (ratio >= 2.19) el.stage.classList.add('aspect-20-9');
     else if (ratio >= 2.05) el.stage.classList.add('aspect-19-5-9');
     else if (ratio >= 1.65) el.stage.classList.add('aspect-16-9');
     else el.stage.classList.add('aspect-4-3');
-  }
-
-  function clearTransientViewerState() {
-    frameCanvasMismatch = false;
-    el.stage.classList.remove('frame-letterbox-fix');
-    document.documentElement.classList.remove('frame-letterbox-fix');
-    el.stage.classList.remove('aspect-20-9','aspect-19-5-9','aspect-16-9','aspect-4-3');
   }
 
   function applyViewerGeometry() {
@@ -65,28 +75,26 @@
     setAspectClass();
   }
 
-  function refreshAfterOrientationChange(nextOrientation) {
+  function acceptOrientation(nextOrientation) {
     if (!nextOrientation || nextOrientation === 'unknown') return;
-    const epoch = ++orientationEpoch;
-    clearTransientViewerState();
-    lastStableOrientation = nextOrientation;
-    repairAttempts = 0;
-    badQualityWindows = 0;
-    goodQualityWindows = 0;
-    applyViewerGeometry();
-
-    // Reapply the encoder format after Android has settled into the new orientation.
-    // This intentionally mirrors the manual quality/size change that used to fix the
-    // portrait frame, but it does not resize MediaProjection/VirtualDisplay.
-    const phases = [0, 90, 220, 480, 850, 1350];
-    phases.forEach((delay, index) => setTimeout(() => {
-      if (epoch !== orientationEpoch || !channelAuthenticated || !control || control.readyState !== 'open') return;
+    if (nextOrientation !== lastStableOrientation) {
       clearTransientViewerState();
+      lastStableOrientation = nextOrientation;
+      repairAttempts = 0;
+      badQualityWindows = 0;
+      goodQualityWindows = 0;
+    }
+
+    // Viewer-only refresh. Encoder geometry is now updated atomically by WebRtcHost from
+    // MediaProjection.onCapturedContentResize(); do not reapply profiles repeatedly here.
+    requestAnimationFrame(() => {
       applyViewerGeometry();
       try { updateViewerGeometry(true); } catch {}
-      if (index === 1 || index === 3) sendControl({type:'capture_geometry_refresh'});
-      if (index === 2 || index === 4) sendControl({type:'capture_profile', profile:currentAdaptiveProfile});
-    }, delay));
+    });
+    setTimeout(() => {
+      applyViewerGeometry();
+      try { updateViewerGeometry(true); } catch {}
+    }, 180);
   }
 
   const originalUpdateViewerGeometry = updateViewerGeometry;
@@ -108,7 +116,7 @@
 
   function applyReceiverTarget(targetMs) {
     if (!pc) return;
-    const target = Math.max(42, Math.min(105, Math.round(targetMs)));
+    const target = Math.max(45, Math.min(105, Math.round(targetMs)));
     for (const receiver of pc.getReceivers()) {
       if (receiver?.track?.kind !== 'video') continue;
       try {
@@ -123,36 +131,29 @@
   tuneReceiverForLowLatency = function(receiver) {
     if (!receiver) return receiver;
     try {
-      if ('jitterBufferTarget' in receiver) receiver.jitterBufferTarget = 60;
+      if ('jitterBufferTarget' in receiver) receiver.jitterBufferTarget = 55;
     } catch {}
     try {
-      if ('playoutDelayHint' in receiver) receiver.playoutDelayHint = 0.06;
+      if ('playoutDelayHint' in receiver) receiver.playoutDelayHint = 0.055;
     } catch {}
     return receiver;
   };
 
   const originalApplyRemoteGeometry = applyRemoteGeometry;
   applyRemoteGeometry = function(data) {
+    originalApplyRemoteGeometry(data);
     const sourceW = Number(data?.captureContentWidth || data?.displayWidth || 0);
     const sourceH = Number(data?.captureContentHeight || data?.displayHeight || 0);
-    const expected = data?.orientation || (sourceW && sourceH ? (sourceW > sourceH ? 'landscape' : 'portrait') : 'unknown');
-    const previous = lastStableOrientation;
-
-    originalApplyRemoteGeometry(data);
-
-    if (expected !== 'unknown' && expected !== previous) {
-      refreshAfterOrientationChange(expected);
-    } else {
-      if (expected !== 'unknown') lastStableOrientation = expected;
-      applyViewerGeometry();
-      scheduleOrientationConsistencyCheck();
-    }
+    const expected = data?.orientation || (
+      sourceW && sourceH ? (sourceW > sourceH ? 'landscape' : 'portrait') : 'unknown'
+    );
+    acceptOrientation(expected);
+    scheduleOrientationConsistencyCheck();
   };
 
   function scheduleOrientationConsistencyCheck() {
-    setTimeout(checkOrientationConsistency, 150);
-    setTimeout(checkOrientationConsistency, 700);
-    setTimeout(checkOrientationConsistency, 1300);
+    setTimeout(checkOrientationConsistency, 350);
+    setTimeout(checkOrientationConsistency, 1000);
   }
 
   function checkOrientationConsistency() {
@@ -169,21 +170,20 @@
     }
 
     const now = Date.now();
-    if (now - lastGeometryRepairAt < 900 || repairAttempts >= 4) return;
+    if (now - lastGeometryRepairAt < 1400 || repairAttempts >= 2) return;
     lastGeometryRepairAt = now;
     repairAttempts += 1;
-    sendControl({ type:'capture_geometry_refresh' });
-    if (repairAttempts === 2) sendControl({type:'capture_profile', profile:currentAdaptiveProfile});
+    sendControl({type:'capture_geometry_refresh'});
   }
 
   function requestProfile(profile, reason) {
     if (!channelAuthenticated || !control || control.readyState !== 'open') return;
     if (profile === currentAdaptiveProfile) return;
     const now = Date.now();
-    if (now - lastProfileChangeAt < 4500) return;
+    if (now - lastProfileChangeAt < 8000) return;
     lastProfileChangeAt = now;
     currentAdaptiveProfile = profile;
-    sendControl({ type:'capture_profile', profile });
+    sendControl({type:'capture_profile', profile});
     if (reason) setMessage(reason, profile === 'balanced' ? 'success' : '');
   }
 
@@ -207,17 +207,16 @@
         lastFramesDropped = 0;
         lastFramesDecoded = 0;
         setTimeout(() => {
-          if (channelAuthenticated && control?.readyState === 'open') {
-            sendControl({ type:'capture_profile', profile:'balanced' });
-            applyReceiverTarget(60);
-            applyViewerGeometry();
-          }
-        }, 80);
-        scheduleOrientationConsistencyCheck();
+          if (!channelAuthenticated || control?.readyState !== 'open') return;
+          sendControl({type:'capture_profile', profile:'balanced'});
+          applyReceiverTarget(55);
+          applyViewerGeometry();
+        }, 100);
       }
 
       if (data?.type === 'display_geometry') {
-        applyViewerGeometry();
+        const expected = data.orientation || 'unknown';
+        acceptOrientation(expected);
         scheduleOrientationConsistencyCheck();
       }
     };
@@ -247,6 +246,7 @@
       const deltaJitterDelay = lastJitterDelay > 0 ? Math.max(0, jitterDelay - lastJitterDelay) : 0;
       const deltaDropped = lastFramesDropped > 0 ? Math.max(0, framesDropped - lastFramesDropped) : 0;
       const deltaDecoded = lastFramesDecoded > 0 ? Math.max(0, framesDecoded - lastFramesDecoded) : 0;
+
       lastPacketsReceived = received;
       lastPacketsLost = lost;
       lastEmitted = emitted;
@@ -260,15 +260,15 @@
       const frameWindow = deltaDecoded + deltaDropped;
       const dropPct = frameWindow > 0 ? (deltaDropped / frameWindow) * 100 : 0;
 
-      let targetMs = 48;
-      if (jitterMs > 26 || lossPct > 1.0) targetMs = 100;
+      let targetMs = 52;
+      if (jitterMs > 25 || lossPct > 1.0) targetMs = 100;
       else if (jitterMs > 14 || lossPct > 0.35) targetMs = 78;
-      else if (jitterMs > 8 || lossPct > 0.12) targetMs = 60;
+      else if (jitterMs > 8 || lossPct > 0.12) targetMs = 62;
       applyReceiverTarget(targetMs);
 
-      const severe = bufferNowMs > 165 || jitterMs > 30 || lossPct > 1.0 || dropPct > 5;
-      const pressured = bufferNowMs > 105 || jitterMs > 17 || lossPct > 0.35 || dropPct > 2;
-      const healthy = bufferNowMs > 0 && bufferNowMs < 80 && jitterMs < 12 && lossPct < 0.25 && dropPct < 1;
+      const severe = bufferNowMs > 170 || jitterMs > 30 || lossPct > 1.0 || dropPct > 5;
+      const pressured = bufferNowMs > 115 || jitterMs > 19 || lossPct > 0.45 || dropPct > 2.5;
+      const healthy = bufferNowMs > 0 && bufferNowMs < 75 && jitterMs < 11 && lossPct < 0.2 && dropPct < 1;
 
       if (severe) {
         badQualityWindows += 2;
@@ -284,10 +284,10 @@
         goodQualityWindows = 0;
       }
 
-      if (currentAdaptiveProfile === 'balanced' && badQualityWindows >= 2) {
+      if (currentAdaptiveProfile === 'balanced' && badQualityWindows >= 3) {
         badQualityWindows = 0;
-        requestProfile('economy', 'Vídeo pressionado: reduzindo carga para evitar artefatos e fila de atraso.');
-      } else if (currentAdaptiveProfile === 'economy' && goodQualityWindows >= 6) {
+        requestProfile('economy', 'Vídeo pressionado: reduzindo carga para manter frames estáveis.');
+      } else if (currentAdaptiveProfile === 'economy' && goodQualityWindows >= 8) {
         goodQualityWindows = 0;
         requestProfile('balanced', 'Transmissão estabilizada: restaurando qualidade balanceada.');
       }
@@ -298,7 +298,7 @@
   startStats = function() {
     originalStartStats();
     clearInterval(latencyTuningTimer);
-    latencyTuningTimer = setInterval(retuneLatencyFromStats, 1200);
+    latencyTuningTimer = setInterval(retuneLatencyFromStats, 1400);
     retuneLatencyFromStats();
 
     const consistencyTimer = setInterval(() => {
@@ -308,7 +308,7 @@
       }
       checkOrientationConsistency();
       applyViewerGeometry();
-    }, 700);
+    }, 900);
   };
 
   window.addEventListener('resize', applyViewerGeometry);
