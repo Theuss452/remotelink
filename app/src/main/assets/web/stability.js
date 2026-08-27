@@ -75,9 +75,18 @@
     setAspectClass();
   }
 
+  function cancelActiveDragForOrientationChange() {
+    if (!pointerStart) return;
+    sendControl({type:'drag_cancel'});
+    pointerStart = null;
+  }
+
   function acceptOrientation(nextOrientation) {
     if (!nextOrientation || nextOrientation === 'unknown') return;
     if (nextOrientation !== lastStableOrientation) {
+      // A real orientation change changes the coordinate space, so ending the gesture is
+      // intentional here. Ordinary video/encoder/viewer refreshes must never cancel it.
+      if (lastStableOrientation !== 'unknown') cancelActiveDragForOrientationChange();
       clearTransientViewerState();
       lastStableOrientation = nextOrientation;
       repairAttempts = 0;
@@ -99,7 +108,19 @@
 
   const originalUpdateViewerGeometry = updateViewerGeometry;
   updateViewerGeometry = function(force = false) {
-    originalUpdateViewerGeometry(force);
+    // app.js historically cancelled every active drag from updateViewerGeometry(). That was
+    // harmless when geometry almost never changed, but the newer WebRTC pipeline refreshes
+    // geometry/metadata regularly. Hide the active drag from the legacy function, then restore
+    // it after the visual update so a press remains down until pointerup/pointercancel.
+    const activeDrag = pointerStart;
+    if (activeDrag) pointerStart = null;
+    try {
+      originalUpdateViewerGeometry(force);
+    } finally {
+      if (activeDrag && controlMode && controlReady && pointerStart == null) {
+        pointerStart = activeDrag;
+      }
+    }
     applyViewerGeometry();
   };
 
