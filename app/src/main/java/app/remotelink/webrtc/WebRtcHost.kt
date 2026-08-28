@@ -97,8 +97,6 @@ class WebRtcHost(
 
         override fun onDisplayChanged(displayId: Int) {
             if (displayId != Display.DEFAULT_DISPLAY || !captureStarted) return
-            // Do not guess encoder geometry immediately from DisplayMetrics. The projection
-            // callback is the authority; this is only a delayed verification fallback.
             watchdogHandler.postDelayed({
                 if (!disposed && captureStarted) {
                     forceGeometryRefresh = true
@@ -155,7 +153,6 @@ class WebRtcHost(
                     projectionContentHeight = even(height)
                     forceGeometryRefresh = true
                     scheduleGeometryRefresh(0L)
-                    // Re-verify once after the compositor/encoder has consumed a few frames.
                     watchdogHandler.postDelayed({
                         if (!disposed && captureStarted &&
                             projectionContentWidth == even(width) && projectionContentHeight == even(height)
@@ -444,8 +441,6 @@ class WebRtcHost(
         captureGeometryExecutor.execute {
             if (disposed || !captureStarted) return@execute
             try {
-                // ScreenCapturerAndroid already resized SurfaceTexture/VirtualDisplay from the
-                // MediaProjection callback. Only refresh encoder/output geometry here.
                 baseCaptureWidth = capturer.currentWidth().takeIf { it > 1 } ?: capture.x
                 baseCaptureHeight = capturer.currentHeight().takeIf { it > 1 } ?: capture.y
                 lastCaptureWidth = capture.x
@@ -497,8 +492,6 @@ class WebRtcHost(
         val spec = activeSpec ?: return
         try {
             val params = sender.parameters
-            // Screen content is much less tolerant of resolution oscillation than camera video.
-            // Keep resolution stable and let WebRTC reduce frame rate first under pressure.
             params.degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
             params.encodings.forEach { encoding ->
                 encoding.minBitrateBps = spec.minBitrateBps
@@ -704,6 +697,24 @@ class WebRtcHost(
             "drag_move" -> service.dragMoveNormalized(obj.optDouble("x").toFloat(), obj.optDouble("y").toFloat())
             "drag_end" -> service.dragEndNormalized(obj.optDouble("x").toFloat(), obj.optDouble("y").toFloat())
             "drag_cancel" -> { service.cancelRemoteDrag(); true }
+            "multitouch_start" -> service.multiTouchStartNormalized(
+                obj.optDouble("x1").toFloat(), obj.optDouble("y1").toFloat(),
+                obj.optDouble("x2").toFloat(), obj.optDouble("y2").toFloat()
+            )
+            "multitouch_move" -> service.multiTouchMoveNormalized(
+                obj.optDouble("x1").toFloat(), obj.optDouble("y1").toFloat(),
+                obj.optDouble("x2").toFloat(), obj.optDouble("y2").toFloat()
+            )
+            "multitouch_end" -> service.multiTouchEndNormalized(
+                obj.optDouble("x1").toFloat(), obj.optDouble("y1").toFloat(),
+                obj.optDouble("x2").toFloat(), obj.optDouble("y2").toFloat()
+            )
+            "multitouch_cancel" -> { service.cancelRemoteDrag(); true }
+            "pinch" -> service.pinchNormalized(
+                obj.optDouble("x", 0.5).toFloat(),
+                obj.optDouble("y", 0.5).toFloat(),
+                obj.optDouble("scale", 1.0).toFloat()
+            )
             "back" -> service.back(); "home" -> service.home(); "recents" -> service.recents()
             "text" -> service.setFocusedText(obj.optString("text")); "key_text" -> service.insertFocusedText(obj.optString("text"))
             "key_backspace" -> service.deleteFocusedText(backward = true); "key_delete" -> service.deleteFocusedText(backward = false)
@@ -770,7 +781,11 @@ class WebRtcHost(
         private const val WATCHDOG_INTERVAL_MS = 5_000L
         private const val WATCHDOG_TIMEOUT_MS = 30_000L
         private const val FILE_APPROVAL_TIMEOUT_MS = 30_000L
-        private val TOUCH_ACTIONS = setOf("tap", "swipe", "drag_start", "drag_move", "drag_end", "drag_cancel", "back", "home", "recents")
+        private val TOUCH_ACTIONS = setOf(
+            "tap", "swipe", "drag_start", "drag_move", "drag_end", "drag_cancel",
+            "multitouch_start", "multitouch_move", "multitouch_end", "multitouch_cancel", "pinch",
+            "back", "home", "recents"
+        )
         private val KEYBOARD_ACTIONS = setOf("text", "key_text", "key_backspace", "key_delete", "key_cursor", "key_select_all", "key_enter")
         private val factoryInitialized = AtomicBoolean(false)
     }
