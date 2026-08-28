@@ -1,4 +1,4 @@
-name: Build RemoteLink v0.9.11-alpha
+name: Build RemoteLink v0.9.12-alpha
 
 on:
   push:
@@ -43,11 +43,11 @@ jobs:
       - name: Build direct debug APK
         run: |
           gradle --no-daemon --stacktrace assembleDirectDebug
-          cp app/build/outputs/apk/direct/debug/app-direct-debug.apk RemoteLink-v0.9.11-alpha-direct-debug.apk
+          cp app/build/outputs/apk/direct/debug/app-direct-debug.apk RemoteLink-v0.9.12-alpha-direct-debug.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: RemoteLink-v0.9.11-alpha-direct-debug
-          path: RemoteLink-v0.9.11-alpha-direct-debug.apk
+          name: RemoteLink-v0.9.12-alpha-direct-debug
+          path: RemoteLink-v0.9.12-alpha-direct-debug.apk
           retention-days: 14
       - name: Check release signing configuration
         id: signing
@@ -67,29 +67,29 @@ jobs:
         if: steps.signing.outputs.enabled == 'true'
         run: |
           gradle --no-daemon --stacktrace assembleDirectRelease bundlePlayRelease
-          cp app/build/outputs/apk/direct/release/app-direct-release.apk RemoteLink-v0.9.11-alpha-release.apk
-          cp app/build/outputs/bundle/playRelease/app-play-release.aab RemoteLink-v0.9.11-alpha-play.aab
+          cp app/build/outputs/apk/direct/release/app-direct-release.apk RemoteLink-v0.9.12-alpha-release.apk
+          cp app/build/outputs/bundle/playRelease/app-play-release.aab RemoteLink-v0.9.12-alpha-play.aab
       - name: Verify release APK signature
         if: steps.signing.outputs.enabled == 'true'
         run: |
           APKSIGNER="$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner"
           [[ -x "$APKSIGNER" ]] || APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -maxdepth 2 -type f -name apksigner -perm -111 | sort -V | tail -n 1)"
           [[ -n "$APKSIGNER" && -x "$APKSIGNER" ]] || { echo "apksigner não encontrado" >&2; exit 1; }
-          "$APKSIGNER" verify --verbose --print-certs RemoteLink-v0.9.11-alpha-release.apk
+          "$APKSIGNER" verify --verbose --print-certs RemoteLink-v0.9.12-alpha-release.apk
       - name: Generate update manifest
         if: steps.signing.outputs.enabled == 'true'
         run: |
           python3 - <<'PY'
           import json, os, hashlib
-          name='RemoteLink-v0.9.11-alpha-release.apk'
+          name='RemoteLink-v0.9.12-alpha-release.apk'
           sha=hashlib.sha256(open(name,'rb').read()).hexdigest()
           data={
             'packageName':'app.remotelink',
-            'versionCode':26,
-            'versionName':'0.9.11-alpha',
+            'versionCode':27,
+            'versionName':'0.9.12-alpha',
             'apkUrl':os.environ.get('REMOTELINK_DIRECT_APK_URL','').strip(),
             'sha256':sha,
-            'notes':'RemoteLink v0.9.11-alpha: corrige o gesto de segurar e arrastar no controle remoto. Atualizações normais de geometria, resolução e metadados do vídeo não enviam mais drag_cancel; o toque permanece pressionado até pointerup/pointercancel, perda real de foco ou mudança efetiva de orientação. Mantém as correções de rotação e frame pacing da v0.9.10.'
+            'notes':'RemoteLink v0.9.12-alpha: adiciona multitouch real para zoom com dois dedos na tela remota, incluindo pinça contínua em touchscreen e pinça de trackpad no ChromeOS; mantém o arraste de um dedo/mouse separado para não regressar o drag. A MainActivity do Android agora fica travada em portrait para evitar recriação da interface e perda do servidor/sessão ao virar o aparelho.'
           }
           open('updates.json','w',encoding='utf-8').write(json.dumps(data,ensure_ascii=False,indent=2)+'\n')
           PY
@@ -97,9 +97,9 @@ jobs:
         if: steps.signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: RemoteLink-v0.9.11-alpha-signed-release
+          name: RemoteLink-v0.9.12-alpha-signed-release
           path: |
-            RemoteLink-v0.9.11-alpha-release.apk
-            RemoteLink-v0.9.11-alpha-play.aab
+            RemoteLink-v0.9.12-alpha-release.apk
+            RemoteLink-v0.9.12-alpha-play.aab
             updates.json
           retention-days: 30
