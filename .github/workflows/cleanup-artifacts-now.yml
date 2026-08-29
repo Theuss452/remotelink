@@ -1,0 +1,69 @@
+name: Cleanup Actions Artifacts Now
+
+on:
+  push:
+    branches:
+      - maintenance/cleanup-artifacts-now
+    paths:
+      - .github/workflows/cleanup-artifacts-now.yml
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Delete all repository Actions artifacts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            let deleted = 0;
+            let deletedBytes = 0;
+
+            while (true) {
+              const { data } = await github.rest.actions.listArtifactsForRepo({
+                owner,
+                repo,
+                per_page: 100,
+                page: 1
+              });
+
+              if (!data.artifacts || data.artifacts.length === 0) break;
+
+              let deletedThisPass = 0;
+              for (const artifact of data.artifacts) {
+                try {
+                  core.info(`Deleting artifact ${artifact.id}: ${artifact.name} (${artifact.size_in_bytes || 0} bytes)`);
+                  await github.rest.actions.deleteArtifact({
+                    owner,
+                    repo,
+                    artifact_id: artifact.id
+                  });
+                  deleted += 1;
+                  deletedThisPass += 1;
+                  deletedBytes += Number(artifact.size_in_bytes || 0);
+                } catch (error) {
+                  if (error?.status === 404) {
+                    core.info(`Artifact ${artifact.id} already deleted; continuing.`);
+                    continue;
+                  }
+                  throw error;
+                }
+              }
+
+              if (deletedThisPass === 0) break;
+            }
+
+            const mib = deletedBytes / 1024 / 1024;
+            core.info(`Deleted ${deleted} artifact(s), approximately ${mib.toFixed(2)} MiB.`);
+            await core.summary
+              .addHeading('Actions artifact cleanup')
+              .addRaw(`Deleted **${deleted}** artifact(s), approximately **${mib.toFixed(2)} MiB**.`)
+              .addEOL()
+              .addRaw('GitHub billing/storage usage can take several hours to recalculate after deletion.')
+              .write();
