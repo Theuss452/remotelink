@@ -102,4 +102,4 @@ jobs:
             RemoteLink-v0.9.12-alpha-release.apk
             RemoteLink-v0.9.12-alpha-play.aab
             updates.json
-          retention-days: 30
+          retention-days: 1
