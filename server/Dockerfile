@@ -3,9 +3,9 @@
 # O celular NUNCA expõe porta: só faz HTTPS de saída para este servidor.
 # Segredos (TURN static-auth-secret, domínio) entram via ENV no runtime,
 # nunca hardcoded na imagem.
-FROM alpine:3.20
-RUN apk add --no-cache caddy coturn ca-certificates \
-  && adduser -D -H -s /sbin/nologin turnserver
+FROM alpine:3.21
+RUN apk add --no-cache caddy coturn ca-certificates
+RUN id turnserver || adduser -D -H -s /sbin/nologin turnserver
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY coturn.conf /etc/turnserver.conf
 # O backend de signaling (mesmo contrato autenticado da LAN) escuta em
