@@ -1,0 +1,4 @@
+[TESTER] build=SKIP tests=SKIP (sem SDK local, delegado ao Actions assembleDirectDebug)
+- git: 8 modified + novos (auth/, InternetSignalingClient, server/, web/, docs/), sem commits, branch main...origin/main, log 31d93cd
+- gh: FAIL neste env (gh não instalado) — usuário afirma ter instalado/configurado localmente, pendente revalidar PATH
+- checks leitura PASS: WebRtcHost LAN DISABLED + overload, LanPolicy default false, Pairing HMAC/SAS intactos, sem Log segredo, sem segredo server/web, gradle 28/0.9.13-alpha + okhttp, workflow v0.9.13 + jobs, node --check app.js + config.js PASS, posture greps PASS

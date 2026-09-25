@@ -1,0 +1,6 @@
+[REVIEWER] FAIL (volta 1/3)
+- blocker: server/coturn.conf:17 alt-tls-listening-port=443 conflita com Caddy 443 — container não sobe
+- médio: DeviceIdentityStore.kt:56-64 clear() usa mesmo Editor para zerar + remove (undefined) — separar em 2 edit()
+- baixo: PairingManager.kt:48 pairId 12..80 permissivo (pairId real 16 chars b64url 12 bytes) — endurecer ou documentar
+- ok: MainActivity fail-closed, app.js iceServers via config, gradle/workflow versões, sem violação NUNCA
+- fix: remover/zerar alt-tls-listening-port (manter tls 5349), corrigir clear(), então re-testar

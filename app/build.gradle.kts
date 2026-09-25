@@ -9,11 +9,12 @@ val releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
 val releaseKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
 val hasReleaseSigning = !releaseKeystorePath.isNullOrBlank() && !releaseKeystorePassword.isNullOrBlank() && !releaseKeyAlias.isNullOrBlank() && !releaseKeyPassword.isNullOrBlank()
 val updateManifestUrl = (System.getenv("REMOTELINK_UPDATE_MANIFEST_URL") ?: "").replace("\\", "\\\\").replace("\"", "\\\"")
+val internetServerUrl = (System.getenv("REMOTELINK_INTERNET_URL") ?: "").replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
     namespace = "app.remotelink"
     compileSdk = 36
-    defaultConfig { applicationId = "app.remotelink"; minSdk = 26; targetSdk = 36; versionCode = 27; versionName = "0.9.12-alpha" }
+    defaultConfig { applicationId = "app.remotelink"; minSdk = 26; targetSdk = 36; versionCode = 28; versionName = "0.9.13-alpha"; buildConfigField("String", "INTERNET_SERVER_URL", "\"$internetServerUrl\"") }
     buildFeatures { buildConfig = true }
     flavorDimensions += "distribution"
     productFlavors {
@@ -25,4 +26,4 @@ android {
     compileOptions { sourceCompatibility=JavaVersion.VERSION_17;targetCompatibility=JavaVersion.VERSION_17 }
 }
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
-dependencies { implementation("io.github.webrtc-sdk:android:144.7559.12");implementation("androidx.core:core:1.17.0");implementation("com.google.zxing:core:3.5.3") }
+dependencies { implementation("io.github.webrtc-sdk:android:144.7559.12");implementation("androidx.core:core:1.17.0");implementation("com.google.zxing:core:3.5.3");implementation("com.squareup.okhttp3:okhttp:4.12.0") }

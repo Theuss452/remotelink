@@ -24,7 +24,9 @@ import android.widget.ImageView
 import android.widget.Switch
 import android.widget.TextView
 import app.remotelink.capture.ScreenCaptureService
+import app.remotelink.auth.DeviceIdentityStore
 import app.remotelink.control.RemoteAccessibilityService
+import app.remotelink.network.InternetSignalingClient
 import app.remotelink.network.LanPolicy
 import app.remotelink.network.LocalControlServer
 import app.remotelink.security.PairingManager
@@ -43,6 +45,8 @@ class MainActivity : Activity() {
     private var pendingUpdate: UpdateManager.DownloadResult.Ready? = null
     private var updateCheckRunning = false
     private var currentStrongUrl: String? = null
+    private var identityStore: DeviceIdentityStore? = null
+    private var internetMode: Boolean = false
 
     private lateinit var statusText: TextView
     private lateinit var sessionStatusText: TextView
@@ -58,6 +62,8 @@ class MainActivity : Activity() {
     private lateinit var updateStatus: TextView
     private lateinit var checkUpdateButton: Button
     private lateinit var autoUpdateSwitch: Switch
+    private lateinit var internetModeSwitch: Switch
+    private lateinit var internetStatusText: TextView
 
     private val uiTicker = object : Runnable {
         override fun run() {
@@ -89,11 +95,19 @@ class MainActivity : Activity() {
         autoUpdateSwitch = findViewById(R.id.autoUpdateSwitch)
         captureManager = getSystemService(MediaProjectionManager::class.java)
         updateManager = UpdateManager(applicationContext)
+        identityStore = DeviceIdentityStore(applicationContext).also { pairing.attachIdentityStore(it) }
+
+        internetModeSwitch = findViewById(R.id.internetModeSwitch)
+        internetStatusText = findViewById(R.id.internetStatusText)
+        internetModeSwitch.isChecked = false
+        internetModeSwitch.setOnCheckedChangeListener { _, checked ->
+            setInternetMode(checked)
+        }
 
         findViewById<TextView>(R.id.versionSubtitle).text =
             "Controle Android pelo navegador • v${BuildConfig.VERSION_NAME}"
         findViewById<TextView>(R.id.footerText).text =
-            "LAN-only • QR/HMAC/SAS • uma sessão por vez • v${BuildConfig.VERSION_NAME}"
+            "LAN + Internet (MVP) • QR/HMAC/SAS • uma sessão por vez • v${BuildConfig.VERSION_NAME}"
 
         if (
             Build.VERSION.SDK_INT >= 33 &&
@@ -116,6 +130,7 @@ class MainActivity : Activity() {
         }
         disconnectSessionButton.setOnClickListener {
             server?.revokeSessionsFromDevice()
+            identityStore?.clear()
             hideQr()
             qrVisibilitySwitch.isChecked = false
             sessionStatusText.text = "Sessão encerrada pelo celular"
@@ -359,6 +374,46 @@ class MainActivity : Activity() {
             .show()
     }
 
+    /**
+     * Toggle mínimo do modo internet (MVP). Não altera o fluxo LAN, o
+     * MediaProjection nem a Acessibilidade. O celular continua sem abrir porta:
+     * a saída é só HTTPS via [InternetSignalingClient]; o pareamento continua
+     * QR + HMAC/SAS + aprovação física.
+     */
+    private fun setInternetMode(enabled: Boolean) {
+        val serverUrl = BuildConfig.INTERNET_SERVER_URL
+        if (enabled && serverUrl.isBlank()) {
+            internetModeSwitch.isChecked = false
+            internetMode = false
+            AlertDialog.Builder(this)
+                .setTitle("Servidor não configurado")
+                .setMessage(
+                    "Esta build não tem URL de signaling HTTPS configurada " +
+                        "(REMOTELINK_INTERNET_URL). O modo LAN continua funcionando normalmente."
+                )
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
+        internetMode = enabled
+        internetStatusText.text = if (enabled) {
+            "Internet ligada • QR/HMAC/SAS via servidor HTTPS (sem porta pública no celular)"
+        } else {
+            "Internet desligada • LAN inalterada"
+        }
+        if (enabled && server != null) refreshCode()
+    }
+
+    private fun signalingClientFor(token: String): InternetSignalingClient? {
+        val base = BuildConfig.INTERNET_SERVER_URL
+        if (!internetMode || base.isBlank()) return null
+        return try {
+            InternetSignalingClient(base, token)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun startServer() {
         val binding = LanPolicy.findWifiBinding(this)
         if (binding == null) {
@@ -555,7 +610,9 @@ class MainActivity : Activity() {
         val remoteIp = server?.activeRemoteIp()
         disconnectSessionButton.isEnabled = active
         sessionStatusText.text = if (active) {
-            "Sessão aprovada${remoteIp?.let { " • $it" } ?: ""}"
+            val suffix = remoteIp?.let { " • $it" } ?: ""
+            val via = if (internetMode) " • via Internet (P2P direto ou TURN autenticado)" else ""
+            "Sessão aprovada$suffix$via"
         } else {
             "Nenhuma sessão ativa"
         }

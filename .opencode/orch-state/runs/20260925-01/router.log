@@ -1,0 +1,6 @@
+[MANAGER] task=remotelink-internet fluxo=complexa motivo=keywords auth/network + >3 arquivos + entrypoint WebRtcHost/LocalControlServer sem testes + signaling+TURN+HTTPS multi-arquivo
+[ROUTER] role=explorer model=opencode/nemotron-3.5-lightning-free reason=route[explorer] fallback=—
+[ROUTER] role=planner model=openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free reason=route[planner] fallback=—
+[ROUTER] role=coder model=opencode/muse-spark-1.3-contributor-free reason=route[coder,complexity=high][0] fallback=—
+[ROUTER] role=tester model=opencode/ling-3.0-flash-fin-free reason=route[tester] fallback=—
+[ROUTER] role=reviewer model=openrouter/nvidia/nemotron-3-super-120b-a12b:free reason=route[reviewer]+diferente-do-coder fallback=—

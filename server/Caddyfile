@@ -1,0 +1,31 @@
+# RemoteLink Internet MVP — Caddy reverse-proxy HTTPS.
+# Porta pública: SOMENTE 443/tcp. Sem WS público aberto, sem CORS aberto.
+{
+	auto_https off
+}
+
+:443 {
+	# Domínio real via ENV do deploy (ex.: remotelink.example.com).
+	tls {$TLS_EMAIL}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		# CORS fechado: só o próprio host. Ajuste para o domínio canônico.
+		Access-Control-Allow-Origin "https://{$DOMAIN}"
+		Vary Origin
+	}
+
+	# Web hospedado (mesmo código de app/src/main/assets/web/ + web/config.js).
+	handle /* {
+		root * /srv/web
+		file_server
+	}
+
+	# Signaling autenticado (Bearer) para o backend local do servidor.
+	handle /api/* {
+		reverse_proxy 127.0.0.1:42000
+	}
+}

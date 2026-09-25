@@ -33,37 +33,67 @@ object LanPolicy {
      * names is not reliable on every Android build, so a .local host candidate
      * is rewritten to the already authenticated browser IPv4.
      *
-     * Only UDP host candidates are accepted. srflx/relay/prflx and candidates
-     * for other LAN devices are rejected deliberately in LAN-only mode.
+     * LAN default (allowRelay=false): only UDP host candidates are accepted.
+     * srflx/relay/prflx and candidates for other LAN devices are rejected
+     * deliberately in LAN-only mode. Callers LAN (LocalControlServer) usam o
+     * default e não passam a flag.
+     *
+     * Internet (allowRelay=true): aceita host/srflx/relay sobre udp/tcp, pois o
+     * caminho pode exigir relay TURN autenticado com credencial temporária. O
+     * binding mesma-sub-rede é dispensado — a autenticação da sessão (Bearer +
+     * SAS/HMAC) continua obrigatória antes de qualquer candidate chegar aqui.
      */
     fun normalizeRemoteIceCandidate(
         candidate: String,
         remoteIp: String,
-        binding: WifiBinding
+        binding: WifiBinding,
+        allowRelay: Boolean = false
     ): String? {
         val parts = candidate.trim().split(Regex("\\s+")).toMutableList()
         if (parts.size < 8) return null
 
         val typeIndex = parts.indexOf("typ")
         if (typeIndex < 0 || typeIndex + 1 >= parts.size) return null
-        if (!parts[typeIndex + 1].equals("host", ignoreCase = true)) return null
+        val candidateType = parts[typeIndex + 1].lowercase()
+        if (allowRelay) {
+            if (candidateType !in setOf("host", "srflx", "relay")) return null
+        } else {
+            if (candidateType != "host") return null
+        }
 
         val protocol = parts.getOrNull(2) ?: return null
-        if (!protocol.equals("udp", ignoreCase = true)) return null
+        if (allowRelay) {
+            if (!protocol.equals("udp", ignoreCase = true) && !protocol.equals("tcp", ignoreCase = true)) return null
+        } else {
+            if (!protocol.equals("udp", ignoreCase = true)) return null
+        }
 
-        val approvedAddress = parsePrivateIpv4(remoteIp) ?: return null
-        if (!isSameSubnet(binding.address, approvedAddress, binding.prefixLength)) return null
+        val approvedAddress = parsePrivateIpv4(remoteIp)
+        if (!allowRelay) {
+            val approved = approvedAddress ?: return null
+            if (!isSameSubnet(binding.address, approved, binding.prefixLength)) return null
+        }
 
         val candidateAddress = parts.getOrNull(4) ?: return null
-        when {
+        if (allowRelay && candidateType == "relay") {
+            // Candidate de relay carrega o IP do TURN autenticado, não o do
+            // browser — aceita sem binding de endereço (sessão já autenticada).
+        } else when {
             candidateAddress.endsWith(".local", ignoreCase = true) -> {
-                parts[4] = approvedAddress.hostAddress ?: return null
+                if (allowRelay) return candidate.trim().split(Regex("\\s+")).joinToString(" ")
+                parts[4] = (approvedAddress?.hostAddress ?: return null)
             }
             else -> {
-                val literal = parsePrivateIpv4(candidateAddress) ?: return null
-                // A paired browser may advertise only the same interface/IP that
-                // originated its authenticated RemoteLink HTTP session.
-                if (literal.hostAddress != approvedAddress.hostAddress) return null
+                if (allowRelay) {
+                    // Internet: srflx/host podem carregar IP público — valida só
+                    // a sintaxe IPv4; a confiança vem da sessão autenticada.
+                    if (!isValidIpv4Literal(candidateAddress)) return null
+                } else {
+                    val literal = parsePrivateIpv4(candidateAddress) ?: return null
+                    // A paired browser may advertise only the same interface/IP that
+                    // originated its authenticated RemoteLink HTTP session.
+                    if (literal.hostAddress != approvedAddress?.hostAddress) return null
+                }
             }
         }
 
@@ -111,5 +141,11 @@ object LanPolicy {
         }
         val parsed = InetAddress.getByAddress(bytes) as? Inet4Address ?: return null
         return parsed.takeIf { it.isSiteLocalAddress && !it.isLoopbackAddress && !it.isLinkLocalAddress }
+    }
+
+    private fun isValidIpv4Literal(raw: String): Boolean {
+        val octets = raw.split('.')
+        if (octets.size != 4) return false
+        return octets.all { it.toIntOrNull() in 0..255 }
     }
 }

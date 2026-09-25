@@ -59,6 +59,19 @@
         </LinearLayout>
 
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="14dp" android:background="@drawable/bg_card" android:orientation="vertical">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ACESSO VIA INTERNET (MVP)" android:textColor="#75849C" android:textSize="10sp" android:textStyle="bold" />
+            <TextView android:id="@+id/internetStatusText" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:text="Internet desligada • LAN inalterada" android:textColor="#94A0B2" android:textSize="12sp" />
+            <Switch
+                android:id="@+id/internetModeSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Permitir pareamento via servidor (HTTPS + TURN)"
+                android:textColor="#D2DBE7"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="14dp" android:background="@drawable/bg_card" android:orientation="vertical">
             <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="PREPARAÇÃO" android:textColor="#75849C" android:textSize="10sp" android:textStyle="bold" />
             <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="7dp" android:text="Permissões do Android" android:textColor="#F2F5FA" android:textSize="18sp" android:textStyle="bold" />
             <TextView android:id="@+id/captureStatusText" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:text="Autorize a tela e a Acessibilidade para controle completo" android:textColor="#94A0B2" android:textSize="12sp" />

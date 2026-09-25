@@ -1,0 +1,1 @@
+{"profile": "java-gradle", "lang": "kotlin", "build": "gradle", "markers": ["build.gradle.kts", "settings.gradle.kts", "gradle/", "app/build.gradle.kts", ".github/workflows/android-build.yml"], "checked_at": "2026-09-25T00:00:00Z"}

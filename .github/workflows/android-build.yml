@@ -1,4 +1,4 @@
-name: Build RemoteLink v0.9.12-alpha
+name: Build RemoteLink v0.9.13-alpha
 
 on:
   push:
@@ -36,6 +36,7 @@ jobs:
           node --check app/src/main/assets/web/strong-pair.js
           node --check app/src/main/assets/web/transfer.js
           node --check app/src/main/assets/web/reconnect.js
+          node --check web/config.js
       - uses: gradle/actions/setup-gradle@v4
         with: {gradle-version: '8.13'}
       - name: Prepare Android SDK
@@ -43,11 +44,11 @@ jobs:
       - name: Build direct debug APK
         run: |
           gradle --no-daemon --stacktrace assembleDirectDebug
-          cp app/build/outputs/apk/direct/debug/app-direct-debug.apk RemoteLink-v0.9.12-alpha-direct-debug.apk
+          cp app/build/outputs/apk/direct/debug/app-direct-debug.apk RemoteLink-v0.9.13-alpha-direct-debug.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: RemoteLink-v0.9.12-alpha-direct-debug
-          path: RemoteLink-v0.9.12-alpha-direct-debug.apk
+          name: RemoteLink-v0.9.13-alpha-direct-debug
+          path: RemoteLink-v0.9.13-alpha-direct-debug.apk
           retention-days: 14
       - name: Check release signing configuration
         id: signing
@@ -67,29 +68,29 @@ jobs:
         if: steps.signing.outputs.enabled == 'true'
         run: |
           gradle --no-daemon --stacktrace assembleDirectRelease bundlePlayRelease
-          cp app/build/outputs/apk/direct/release/app-direct-release.apk RemoteLink-v0.9.12-alpha-release.apk
-          cp app/build/outputs/bundle/playRelease/app-play-release.aab RemoteLink-v0.9.12-alpha-play.aab
+          cp app/build/outputs/apk/direct/release/app-direct-release.apk RemoteLink-v0.9.13-alpha-release.apk
+          cp app/build/outputs/bundle/playRelease/app-play-release.aab RemoteLink-v0.9.13-alpha-play.aab
       - name: Verify release APK signature
         if: steps.signing.outputs.enabled == 'true'
         run: |
           APKSIGNER="$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner"
           [[ -x "$APKSIGNER" ]] || APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -maxdepth 2 -type f -name apksigner -perm -111 | sort -V | tail -n 1)"
           [[ -n "$APKSIGNER" && -x "$APKSIGNER" ]] || { echo "apksigner não encontrado" >&2; exit 1; }
-          "$APKSIGNER" verify --verbose --print-certs RemoteLink-v0.9.12-alpha-release.apk
+          "$APKSIGNER" verify --verbose --print-certs RemoteLink-v0.9.13-alpha-release.apk
       - name: Generate update manifest
         if: steps.signing.outputs.enabled == 'true'
         run: |
           python3 - <<'PY'
           import json, os, hashlib
-          name='RemoteLink-v0.9.12-alpha-release.apk'
+          name='RemoteLink-v0.9.13-alpha-release.apk'
           sha=hashlib.sha256(open(name,'rb').read()).hexdigest()
           data={
             'packageName':'app.remotelink',
-            'versionCode':27,
-            'versionName':'0.9.12-alpha',
+            'versionCode':28,
+            'versionName':'0.9.13-alpha',
             'apkUrl':os.environ.get('REMOTELINK_DIRECT_APK_URL','').strip(),
             'sha256':sha,
-            'notes':'RemoteLink v0.9.12-alpha: adiciona multitouch real para zoom com dois dedos na tela remota, incluindo pinça contínua em touchscreen e pinça de trackpad no ChromeOS; mantém o arraste de um dedo/mouse separado para não regressar o drag. A MainActivity do Android agora fica travada em portrait para evitar recriação da interface e perda do servidor/sessão ao virar o aparelho.'
+            'notes':'RemoteLink v0.9.13-alpha: MVP de acesso via Internet — signaling HTTPS de saída (sem porta pública no celular), pareamento QR/HMAC/SAS inalterado, relay TURN cego com credencial temporária e web hospedado via HTTPS. LAN continua host/UDP estrita por padrão.'}
           }
           open('updates.json','w',encoding='utf-8').write(json.dumps(data,ensure_ascii=False,indent=2)+'\n')
           PY
@@ -97,9 +98,33 @@ jobs:
         if: steps.signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: RemoteLink-v0.9.12-alpha-signed-release
+          name: RemoteLink-v0.9.13-alpha-signed-release
           path: |
-            RemoteLink-v0.9.12-alpha-release.apk
-            RemoteLink-v0.9.12-alpha-play.aab
+            RemoteLink-v0.9.13-alpha-release.apk
+            RemoteLink-v0.9.13-alpha-play.aab
             updates.json
           retention-days: 1
+
+  internet-server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate TURN/Caddy security posture (no secrets, auth required)
+        run: |
+          set -euo pipefail
+          grep -q '^use-auth-secret' server/coturn.conf
+          grep -q '^stale-nonce' server/coturn.conf
+          grep -q '^denied-peer-ip' server/coturn.conf
+          grep -q 'reverse_proxy 127.0.0.1:42000' server/Caddyfile
+          grep -q 'X-Frame-Options "DENY"' server/Caddyfile
+          # Nenhuma diretiva com segredo efetivo (só comentários + ENV no runtime):
+          grep -qiE '^\s*(static-auth-secret|password)\s*=' server/coturn.conf && { echo "segredo hardcoded no coturn.conf" >&2; exit 1; } || echo "sem segredos efetivos"
+          # TURN_SECRET e DOMAIN entram via ENV no runtime, nunca no repo:
+          grep -q 'TURN_SECRET' server/Dockerfile
+          node --check web/config.js
+          echo "server/ OK: TURN com auth + CORS fechado + sem segredos"
+      - name: Build internet server image
+        run: docker build -f server/Dockerfile -t remotelink-internet-mvp:0.9.13-alpha server/

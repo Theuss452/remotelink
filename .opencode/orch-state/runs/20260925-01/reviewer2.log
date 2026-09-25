@@ -1,0 +1,4 @@
+[REVIEWER-B] FAIL (volta 2/3, suspeito de falso-positivo)
+- motivo citado: LocalControlServer.kt:158 CORS não está aberto (só mesma origem, sem headers CORS)
+- análise manager: CORS fechado é o comportamento EXIGIDO (NUNCA CORS aberto + endpoint sem auth). Veredito contradiz a própria restrição dura.
+- ação: desconsiderar como bloqueador; manter volta 1 como válida (já corrigida), tester re-test PASS (SKIP com checks OK). Pendente revisão primária final ou MANAGER_REVIEW + Actions verde.

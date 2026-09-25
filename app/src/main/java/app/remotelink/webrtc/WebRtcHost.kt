@@ -192,7 +192,31 @@ class WebRtcHost(
     fun isCaptureStarted(): Boolean = captureStarted
     fun hasActiveSession(): Boolean = expectedSessionHash != null && peerState == "connected"
 
-    fun createAnswer(sessionHash: String, offerSdp: String): String {
+    /**
+     * LAN (default): sem STUN/TURN, TCP desabilitado. Preservado intacto.
+     */
+    fun createAnswer(sessionHash: String, offerSdp: String): String =
+        createAnswerInternal(sessionHash, offerSdp, emptyList(), allowTcpRelay = false)
+
+    /**
+     * Internet: IceServers dinâmicos (STUN + TURN com credencial temporária via
+     * InternetSignalingClient) e TCP habilitado SOMENTE neste modo, para
+     * atravessar NATs restritivos via TURN/TLS. DTLS/SRTP e auth do DataChannel
+     * seguem idênticos ao modo LAN.
+     */
+    fun createAnswer(
+        sessionHash: String,
+        offerSdp: String,
+        iceServers: List<PeerConnection.IceServer>,
+        allowTcpRelay: Boolean
+    ): String = createAnswerInternal(sessionHash, offerSdp, iceServers, allowTcpRelay)
+
+    private fun createAnswerInternal(
+        sessionHash: String,
+        offerSdp: String,
+        iceServers: List<PeerConnection.IceServer>,
+        allowTcpRelay: Boolean
+    ): String {
         synchronized(lock) {
             check(!disposed) { "WebRTC host encerrado" }
             closePeerLocked()
@@ -208,10 +232,14 @@ class WebRtcHost(
             iceState = "new"
             gatheringState = "new"
 
-            val config = PeerConnection.RTCConfiguration(emptyList()).apply {
+            val config = PeerConnection.RTCConfiguration(iceServers).apply {
                 sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
                 continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
-                tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED
+                tcpCandidatePolicy = if (allowTcpRelay) {
+                    PeerConnection.TcpCandidatePolicy.ENABLED
+                } else {
+                    PeerConnection.TcpCandidatePolicy.DISABLED
+                }
             }
             val created = factory.createPeerConnection(config, observer())
                 ?: error("Não foi possível criar RTCPeerConnection")

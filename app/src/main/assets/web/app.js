@@ -79,7 +79,7 @@ async function startWebRtc(){
   if(!token)throw new Error('Sessão de pareamento ausente.');if(!('RTCPeerConnection'in window))throw new Error('Este navegador não oferece WebRTC.');
   const generation=++connectGeneration;await waitForCaptureReady();if(generation!==connectGeneration||!token)return;
   closePeerOnly(false);setConnectOverlay(true,'Criando conexão WebRTC…');el.title.textContent='Conectando ao Android';browserCandidates=[];answerInstalled=false;controlReady=false;channelAuthenticated=false;commandSeq=0;enforceAutoFit();
-  pc=new RTCPeerConnection({iceServers:[],iceTransportPolicy:'all',bundlePolicy:'max-bundle'});
+  pc=new RTCPeerConnection({iceServers:window.REMOTELINK_ICE_SERVERS||[],iceTransportPolicy:'all',bundlePolicy:'max-bundle'});
   const videoTransceiver=pc.addTransceiver('video',{direction:'recvonly'});preferHardwareFriendlyVideoCodec(videoTransceiver);tuneReceiverForLowLatency(videoTransceiver.receiver);
   control=pc.createDataChannel('control',{ordered:true});bindControlChannel(control);
   pc.ontrack=ev=>{tuneReceiverForLowLatency(ev.receiver);const stream=ev.streams?.[0]||new MediaStream([ev.track]);el.video.srcObject=stream;enforceAutoFit();el.video.play().catch(()=>{});el.placeholder.classList.add('hidden');el.stage.classList.add('streaming');el.title.textContent='Android conectado';updateViewerGeometry(true);};
