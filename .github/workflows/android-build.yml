@@ -93,7 +93,6 @@ jobs:
             'apkUrl':os.environ.get('REMOTELINK_DIRECT_APK_URL','').strip(),
             'sha256':sha,
             'notes':'RemoteLink v0.9.13-alpha: MVP de acesso via Internet — signaling HTTPS de saída (sem porta pública no celular), pareamento QR/HMAC/SAS inalterado, relay TURN cego com credencial temporária e web hospedado via HTTPS. LAN continua host/UDP estrita por padrão.'}
-          }
           open('updates.json','w',encoding='utf-8').write(json.dumps(data,ensure_ascii=False,indent=2)+'\n')
           PY
       - name: Upload signed release bundle
